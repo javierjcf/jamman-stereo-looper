@@ -140,8 +140,9 @@ Revisado contra el código y contra el análisis del programa original
 canciones, lo **importante** para el buen funcionamiento y la paridad con el
 original, y lo **opcional**.
 
-> Las filas marcadas con 🔍 dependen de un análisis del original que está en
-> curso; se actualizarán con lo que se encuentre.
+> Las filas marcadas con 🔍 dependen de algo que solo se sabrá con el pedal.
+> El análisis del programa original está en `REA JamManagerXT/`, fuera del
+> repositorio (es material de DigiTech).
 
 ### 🔴 Imprescindible (que cargar en la SD sea fiable)
 
@@ -150,9 +151,8 @@ original, y lo **opcional**.
 | 1 | **Comprobar en el pedal un bucle escrito por la app.** | Todo el formato se ha contrastado con bucles escritos por el software original, pero no consta que el pedal haya cargado uno generado por esta app. Prueba mínima: meter la tarjeta en el pedal y comprobar que el bucle aparece en su posición, suena a su velocidad y respeta tempo, compás, parada y ritmo. |
 | 2 | **Escritura segura en FAT.** Solo el audio se sincroniza (`sync_all`); `patch.xml`, `phrase.xml` y el renombrado de la carpeta no. La GUI solo *recuerda* expulsar la tarjeta. | Si se saca la tarjeta justo después de importar, puede quedar un bucle sin XML o sin carpeta. Hace falta sincronizar ficheros y carpeta al terminar, y un botón de **expulsión segura** (Linux: `udisks`; Windows: expulsar volumen). |
 | 3 | **Comprobar el espacio antes de copiar** y **limpiar restos** `.tmp-PatchNN`. | Hoy la tarjeta llena se detecta al fallar la copia (no queda nada a medias, pero se pierde tiempo copiando decenas de MB). El original avisa antes («not enough space on external storage…»). Un corte de corriente deja carpetas temporales que no se limpian al abrir la tarjeta. |
-| 4 | 🔍 **Tarjetas nuevas o recién formateadas.** | La GUI solo detecta tarjetas que ya tienen la carpeta `JamManStereo`; con una tarjeta vacía hay que usar `jamman card init` (no existe en la GUI). Falta saber qué hace el original si la carpeta no existe y si el pedal crea algo más al formatear. Además la tarjeta debe ser FAT32/SDHC (hasta 32 GB); exFAT no la lee el pedal: conviene avisarlo. |
-| 5 | 🔍 **`SettingsVersion` y `AudioVersion`.** | Al editar un bucle o cambiar su audio la app no toca estos contadores. El original los usa para saber si un bucle cambió; no se sabe si el pedal depende de ellos. |
-| 6 | **Windows: compilación y pruebas.** No hay integración continua y no consta que la GUI se haya compilado y probado en Windows (detección de unidades `A:`–`Z:`, rutas, audio). | Es un objetivo del proyecto. Falta un flujo de GitHub Actions para Linux y Windows y una prueba manual con una tarjeta real. |
+| 4 | **Tarjetas nuevas o recién formateadas.** | El análisis del original muestra que **nunca accede a la tarjeta directamente** (no usa ninguna función para listar unidades): solo la ve a través del pedal por USB, así que la carpeta `JamManStereo` la crea el pedal. Nuestra GUI solo detecta tarjetas que ya la tienen; con una vacía hay que usar `jamman card init` (no existe en la GUI). Que el pedal acepte una carpeta creada por nosotros hay que probarlo con una tarjeta vacía. Además la tarjeta debe ser FAT32/SDHC (hasta 32 GB); exFAT no la lee el pedal: conviene avisarlo. |
+| 5 | **Windows: compilación y pruebas.** No hay integración continua y no consta que la GUI se haya compilado y probado en Windows (detección de unidades `A:`–`Z:`, rutas, audio). | Es un objetivo del proyecto. Falta un flujo de GitHub Actions para Linux y Windows y una prueba manual con una tarjeta real. |
 
 ### 🟡 Importante (buen funcionamiento y paridad con el original)
 
@@ -164,7 +164,7 @@ original, y lo **opcional**.
 | **Nombres duplicados** | El original renombra el duplicado. En la tarjeta el pedal solo muestra el número, pero la búsqueda de la GUI sí se resiente. |
 | **Tarjeta bloqueada** (interruptor de solo lectura) y tarjeta retirada en caliente | Mostrar un mensaje claro en lugar de un error de E/S. |
 | **Deshacer y rehacer** | El original lo tiene en su biblioteca y en las opciones de cada bucle (clases `QUndoCommand`). |
-| 🔍 **Tempo y compás por defecto de un bucle importado** | Hoy se escribe 120 BPM y 4 tiempos. Falta ver si el original hace algo más y si el pedal sincroniza mejor con otro valor. |
+| **`SettingsVersion` y `AudioVersion`** al editar | El pedal lee sin problema 61 bucles con `0/0`; solo el grabado en el propio pedal tiene `1/1`. El original escribe el valor de su modelo interno (y genera un GUID nuevo si falta el `ID`, igual que nosotros). No se ha podido saber si el original los sube al editar; el riesgo parece bajo. |
 
 ### 🟢 Opcional
 

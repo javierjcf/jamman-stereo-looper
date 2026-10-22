@@ -4,8 +4,10 @@ Herramienta libre y multiplataforma (Linux y Windows) para gestionar los bucles
 del pedal **DigiTech JamMan Stereo**, pensada para sustituir al software
 original (JamManager XT) cuando deje de funcionar.
 
-> **Estado: en desarrollo.** La gestión de la tarjeta SD funciona y está probada
-> con una tarjeta real. El protocolo USB del pedal se ha deducido por ingeniería
+![Interfaz gráfica](docs/img/gui.png)
+
+> **Estado: en desarrollo.** La gestión de la tarjeta SD (interfaz gráfica y
+> línea de comandos) funciona y está probada con una tarjeta real. El protocolo USB del pedal se ha deducido por ingeniería
 > inversa y **aún no se ha validado con el pedal**
 > ([docs/03-protocolo.md](docs/03-protocolo.md)).
 
@@ -13,14 +15,18 @@ original (JamManager XT) cuando deje de funcionar.
 
 ```
 crates/
-  jamman-core/   Librería: protocolo, formatos y límites del dispositivo (sin GUI)
+  jamman-core/   Librería: tarjeta SD, protocolo USB y límites del dispositivo
+  jamman-audio/  Conversión de audio al formato del pedal y forma de onda
   jamman-cli/    Binario `jamman` (línea de comandos)
+  jamman-gui/    Binario `jamman-gui` (interfaz gráfica, egui)
 docs/            Proceso seguido, decisiones y protocolo
 ```
 
 ## Compilar y probar
 
-Requiere Rust estable reciente (ver `rust-version` en `Cargo.toml`).
+Requiere Rust 1.95 o superior. En Linux hacen falta las cabeceras de ALSA y
+libudev (en Arch: `alsa-lib` y `systemd-libs`; en Debian/Ubuntu:
+`libasound2-dev` y `libudev-dev`).
 
 ```bash
 cargo build --release
@@ -28,22 +34,40 @@ cargo test
 cargo clippy --all-targets
 ```
 
-## Uso con la tarjeta SD (no necesita el pedal)
+## Interfaz gráfica
+
+```bash
+cargo run --release -p jamman-gui                 # detecta la tarjeta sola
+cargo run --release -p jamman-gui -- /ruta/a/la/tarjeta
+```
+
+- Inserta la tarjeta SD del pedal en el ordenador: si solo hay una, se abre sola.
+- **Añadir canciones**: botón «＋ Añadir canciones…» o arrastra ficheros o carpetas
+  a la ventana. MP3, FLAC, OGG, AIFF, M4A y WAV se convierten automáticamente al
+  formato del pedal (opción de normalizar el volumen).
+- **Escuchar**: doble clic en una fila, barra espaciadora o el botón ▶; clic en la
+  forma de onda para saltar.
+- **Editar** en el panel derecho: nombre, tempo, compás, bucle o una vez,
+  invertido, modo de parada, ritmo y catálogo. «Guardar» (Ctrl+S) escribe en la
+  tarjeta.
+- **Mover/intercambiar** posiciones, **exportar** a WAV y **borrar** (Supr, con
+  confirmación).
+
+## Línea de comandos con la tarjeta SD (no necesita el pedal)
 
 Es la función principal: gestionar los bucles directamente en la tarjeta.
 
 ```bash
 jamman card ls /run/media/$USER/TARJETA                 # lista los bucles
-jamman card add /run/media/$USER/TARJETA cancion.wav    # añade (primera posición libre)
+jamman card add /run/media/$USER/TARJETA cancion.mp3    # añade (primera posición libre)
 jamman card add /run/media/$USER/TARJETA cancion.wav --slot 30 --name "Mi canción"
 jamman card rename /run/media/$USER/TARJETA 30 "Otro nombre"
 jamman card export /run/media/$USER/TARJETA 30 copia.wav
 jamman card rm /run/media/$USER/TARJETA 30              # pide confirmación
 ```
 
-El audio debe ser WAV 44,1 kHz, 16 bit, estéreo (hasta 10 minutos); si no, la
-herramienta indica el comando `ffmpeg` para convertirlo. Expulsa la tarjeta antes
-de sacarla. Formato completo en [docs/04-tarjeta-sd.md](docs/04-tarjeta-sd.md).
+El audio se convierte solo a WAV 44,1 kHz, 16 bit, estéreo (máximo 10 minutos
+por bucle); `--normalize` ajusta el volumen. Expulsa la tarjeta antes de sacarla. Formato completo en [docs/04-tarjeta-sd.md](docs/04-tarjeta-sd.md).
 
 ## Uso con el pedal por USB (experimental)
 

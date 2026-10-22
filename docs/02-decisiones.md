@@ -61,8 +61,8 @@ duradero**; ninguna funcionalidad sin necesidad real.
 - La función principal es gestionar bucles en la tarjeta, que se monta como un
   disco normal: no requiere el pedal ni el protocolo USB. Se implementó antes de
   validar el USB y se prueba con carpetas temporales.
-- El audio se copia **sin modificar**; no se convierte formato (se indica `ffmpeg`).
-  Evita dependencias de códecs; se revisará más adelante.
+- Un WAV que ya cumple el formato se copia **sin modificar**; el resto se
+  convierte (ver D15).
 
 ## D13. Escritura segura en la tarjeta
 - Un bucle nuevo se construye en `.tmp-PatchNN` y se renombra al final.
@@ -74,3 +74,26 @@ duradero**; ninguna funcionalidad sin necesidad real.
 ## D14. Dependencias del núcleo
 - `uuid` (solo `v4`) para los GUID de bucles nuevos. `tempfile` solo en tests.
 - El lector XML es propio y mínimo (los ficheros son planos); ver `card/xml.rs`.
+
+## D15. Conversión de audio en un crate propio (`jamman-audio`)
+- `symphonia` (decodificación) y `rubato` (remuestreo FFT): Rust puro, sin
+  bibliotecas del sistema, mantenidos y multiplataforma.
+- El audio se decodifica entero en memoria: es lo más simple y el máximo (10 min)
+  cabe de sobra.
+- Separado del núcleo para que `jamman-core` siga siendo ligero.
+- Las dependencias y `jamman-audio` se compilan optimizados también en
+  desarrollo: sin optimizar, un MP3 de 5 minutos tardaba 17 s.
+
+## D16. Interfaz gráfica con egui
+- `state.rs` (tarjeta, filas, filtro, orden, selección, borrador) no depende de
+  egui y tiene tests: otra interfaz podría reutilizarlo.
+- Los trabajos lentos (importar, forma de onda) van en hilos con canales; la
+  interfaz nunca se bloquea.
+- La forma de onda se muestrea (32 KB por tramo, 400 tramos) y se guarda en una
+  caché en disco: en un lector de SD lento pasa de 10 s a 2,4 s la primera vez y
+  es instantánea después.
+- Reproducción con `rodio` (solo WAV): el dispositivo de audio se abre la
+  primera vez que se reproduce, así que sin salida de audio la app funciona igual.
+- `rust-version` sube a 1.95 para usar egui/eframe 0.37, la versión actual.
+- `JAMMAN_SCREENSHOT` guarda una captura de la ventana: sirve para revisar el
+  diseño y generar la imagen del README sin herramientas externas.

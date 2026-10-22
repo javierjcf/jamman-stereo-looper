@@ -76,9 +76,21 @@ Orden de desarrollo en `jamman-core::protocol` (un commit por paso, tests antes
 o junto con el código): primitivas del cable → cabecera → peticiones →
 respuestas → cliente síncrono sobre `Read + Write`.
 
+## 7. Tarjeta SD, conversión de audio e interfaz gráfica
+1. Se analizó una tarjeta real (61 bucles): estructura, los dos estilos de XML
+   (software de PC y pedal), formato de los WAV. Ver [04-tarjeta-sd.md](04-tarjeta-sd.md).
+2. Se extrajeron del binario los valores de ritmo, modo de parada, tempo y
+   géneros, y del manual su significado.
+3. `jamman-core::card`: leer, importar, editar, mover, exportar y borrar, con
+   ficheros generados byte a byte iguales a los del software original.
+4. `jamman-audio`: conversión con `symphonia` + `rubato`, verificada contra
+   `ffmpeg` como medidor independiente.
+5. `jamman-gui`: interfaz con egui. Se revisó con capturas de la propia app
+   (`JAMMAN_SCREENSHOT`), lo que permitió detectar y corregir la lentitud de la
+   forma de onda en una SD lenta y el ancho de la tabla.
+
 ## Pendiente
 - Validar con el pedal (ver sección 8 de [03-protocolo.md](03-protocolo.md)).
-- Conectar el cliente al puerto serie real en la CLI.
-- Subida de bucles (necesita validar el modo de escritura).
+- Subida de bucles por USB (necesita validar el modo de escritura).
 - Mensajes asíncronos y propiedades.
-- GUI (egui) cuando el núcleo funcione con el pedal.
+- Integrar el pedal por USB en la interfaz gráfica.

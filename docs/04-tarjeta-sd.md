@@ -103,9 +103,29 @@ lee en la tarjeta de ejemplo. Para ello:
 | `export_wav` | Copia el audio; no sobrescribe. |
 | `remove` | Borra la carpeta completa. Irreversible (la CLI pide confirmación). |
 
-Pendiente: conversión de otros formatos (MP3, FLAC, OGG…) a WAV de forma
-integrada (hoy se indica el comando de `ffmpeg`), edición de BPM/ritmo/bucle,
-reordenar o mover bucles entre posiciones y comprobar el espacio libre.
+| `update` | Guarda nombre, ritmo, parada, tempo, compás, bucle/una vez, inversión y catálogo. Solo cambia las etiquetas afectadas, no añade etiquetas con valor por defecto y conserva las desconocidas. |
+| `move_to` / `swap` | Mueve un bucle a una posición libre o intercambia dos; `swap` deshace los pasos si algo falla. |
+
+## Valores de los ajustes
+
+Sacados de las cadenas del software original y del manual:
+
+| Ajuste | Etiqueta | Valores |
+|---|---|---|
+| Ritmo | `RhythmType` | `Silence` (oF), `WoodBlocks` (r1), `Sticks` (r2), `Click` (r3), `AlternativeKickAndHighHat` (r4), `StudioKickAndHighHat` (r5), `TechnoKickAndHighHat` (r6), `Cowbell` (r7), `Conga` (r8), `Tambourine` (r9) |
+| Parada | `StopMode` | `StopInstantly` (Stop), `StopAtEndOfLoop` (Finish), `FadeOut` (Fade) |
+| Tempo | `BeatsPerMinute` | 40 a 240, admite decimales |
+| Compás | `BeatsPerMeasure` | 2 a 15 |
+| Bucle / una vez | `IsLoop` | `1` / `0` |
+| Invertido | `IsReversed` | `1` / `0` |
+| Género | `Genre` | Unspecified, Alternative, Blues, Country, Folk, Funk, Fusion, Hip Hop, Jazz, Latin, Metal, New Age, Rock, Techno |
+| Valoración | `Rating` | 0 a 5 |
+
+## Conversión de audio
+
+`jamman-audio` decodifica MP3, FLAC, OGG/Vorbis, WAV, AIFF y M4A, pasa a estéreo
+(un fichero mono se duplica), remuestrea a 44,1 kHz y escribe WAV de 16 bit, con
+normalización opcional (pico a -0,2 dBFS). Un MP3 de 5 minutos tarda ~0,6 s.
 
 ## Relación con el protocolo USB
 

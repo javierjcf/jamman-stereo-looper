@@ -5,11 +5,13 @@
 //! ajustes, mover, exportar y borrar.
 
 mod app;
+mod browser;
 mod detect;
 mod devshot;
 mod fmt;
 mod jobs;
 mod player;
+mod selection;
 mod state;
 mod theme;
 mod ui;

@@ -2,7 +2,8 @@
 //!
 //! Si la variable `JAMMAN_SCREENSHOT` contiene una ruta, tras unos fotogramas
 //! la app guarda su ventana como imagen PPM y se cierra. Con
-//! `JAMMAN_SCREENSHOT_SLOT=N` selecciona antes el bucle `N`. Sirve para
+//! `JAMMAN_SCREENSHOT_SLOT=N` selecciona antes el bucle `N` y con
+//! `JAMMAN_SCREENSHOT_THEME=light|dark` fuerza el tema. Sirve para
 //! revisar el diseño y generar las capturas del README:
 //!
 //! ```text
@@ -69,6 +70,16 @@ impl DevShot {
                 },
             )));
         }
+    }
+}
+
+/// Tema pedido para la captura, si se pidió alguno.
+pub fn forced_theme() -> Option<egui::Theme> {
+    std::env::var_os("JAMMAN_SCREENSHOT")?;
+    match std::env::var("JAMMAN_SCREENSHOT_THEME").ok()?.as_str() {
+        "light" => Some(egui::Theme::Light),
+        "dark" => Some(egui::Theme::Dark),
+        _ => None,
     }
 }
 

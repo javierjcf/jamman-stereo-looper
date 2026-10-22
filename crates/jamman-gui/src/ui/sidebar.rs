@@ -4,7 +4,7 @@ use eframe::egui::{self, RichText};
 use jamman_core::device::SLOTS_PER_STORAGE;
 
 use crate::app::JamApp;
-use crate::fmt;
+use crate::{fmt, theme};
 
 pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
@@ -48,7 +48,12 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     if let Some(mount) = &current {
         ui.add_space(12.0);
         ui.separator();
-        ui.small(mount.display().to_string());
+        let label = mount.file_name().map_or_else(
+            || mount.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        ui.label(RichText::new(format!("💾 {label}")).strong())
+            .on_hover_text(mount.display().to_string());
         ui.add_space(6.0);
 
         let used = app.lib.rows().len();
@@ -69,7 +74,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
             } else {
                 0.0
             };
-            ui.add(egui::ProgressBar::new(used_fraction));
+            ui.add(egui::ProgressBar::new(used_fraction).fill(theme::ACCENT));
             // 10,6 MB por minuto de audio del pedal.
             let minutes = free as f64 / 10_584_000.0;
             ui.weak(format!("≈ {} de audio más", fmt::duration(minutes * 60.0)));

@@ -88,6 +88,9 @@ impl JamApp {
     /// Crea la aplicación y abre la tarjeta si hay exactamente una conectada.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        if let Some(theme) = crate::devshot::forced_theme() {
+            cc.egui_ctx.set_theme(theme);
+        }
         let mut app = Self {
             lib: Library::default(),
             player: Player::default(),
@@ -105,7 +108,10 @@ impl JamApp {
             waveform_jobs: Vec::new(),
             waveform_pending: HashSet::new(),
         };
-        if let [only] = app.detected.as_slice() {
+        // `jamman-gui <ruta>` abre esa tarjeta; si no, la única detectada.
+        if let Some(path) = std::env::args_os().nth(1) {
+            app.open_card(Path::new(&path));
+        } else if let [only] = app.detected.as_slice() {
             let path = only.clone();
             app.open_card(&path);
         }
@@ -153,7 +159,11 @@ impl JamApp {
             Ok(()) => {
                 self.after_change();
                 let n = self.lib.rows().len();
-                self.info(format!("Tarjeta abierta: {} ({n} bucles)", path.display()));
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                self.info(format!("Tarjeta abierta: {name} ({n} bucles)"));
             }
             Err(e) => self.error(format!("No se puede abrir {}: {e}", path.display())),
         }

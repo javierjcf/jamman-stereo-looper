@@ -56,3 +56,21 @@ duradero**; ninguna funcionalidad sin necesidad real.
 
 ## D11. Firmware fuera de alcance
 - Escribir firmware puede inutilizar el pedal. No se implementa.
+
+## D12. La tarjeta SD primero
+- La función principal es gestionar bucles en la tarjeta, que se monta como un
+  disco normal: no requiere el pedal ni el protocolo USB. Se implementó antes de
+  validar el USB y se prueba con carpetas temporales.
+- El audio se copia **sin modificar**; no se convierte formato (se indica `ffmpeg`).
+  Evita dependencias de códecs; se revisará más adelante.
+
+## D13. Escritura segura en la tarjeta
+- Un bucle nuevo se construye en `.tmp-PatchNN` y se renombra al final.
+- Los XML se generan idénticos a los del software de PC (CRLF, sin BOM), probado
+  con los tamaños reales.
+- `rename` reemplaza solo el texto de `<PatchName>`.
+- El borrado es irreversible: la CLI confirma salvo `--yes`.
+
+## D14. Dependencias del núcleo
+- `uuid` (solo `v4`) para los GUID de bucles nuevos. `tempfile` solo en tests.
+- El lector XML es propio y mínimo (los ficheros son planos); ver `card/xml.rs`.

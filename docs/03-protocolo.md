@@ -141,6 +141,9 @@ Una fecha son 6 bytes: año `u16` y cuatro `i8` (🔶 mes, día, hora, minuto).
 - Cada bucle tiene una carpeta con `PhraseA/phrase.wav` ✅ (ruta literal
   `/PhraseA/phrase.wav`) y metadatos XML con los esquemas
   `http://schemas.digitech.com/JamMan/Patch` y `…/Phrase` ✅.
+- En la **tarjeta SD** el formato es `JamManStereo/PatchNN/PhraseA/…` (ver
+  [04-tarjeta-sd.md](04-tarjeta-sd.md)); es razonable (🔶) que la memoria interna
+  del pedal use la misma estructura.
 - **La ruta raíz de cada almacén y el nombre de la carpeta de cada bucle aún no
   se conocen** ❓. Se averiguarán listando las carpetas con el pedal conectado.
 - Metadatos de la biblioteca local (SQLite): nombre, longitud, valoración,

@@ -67,6 +67,63 @@ pub(crate) fn replace_text(doc: &str, name: &str, value: &str) -> Option<String>
     })
 }
 
+/// Fija el texto de la etiqueta `name`. Si no existe, la crea como última hija
+/// de `parent` respetando el estilo del documento (salto de línea e
+/// indentación: CRLF y 2 espacios en el software de PC, LF y 4 en el pedal). Si `parent` está autocerrado
+/// (`<Metadata />`) lo expande. `None` si tampoco existe `parent`.
+pub(crate) fn set_text(doc: &str, name: &str, value: &str, parent: &str) -> Option<String> {
+    if let Some(updated) = replace_text(doc, name, value) {
+        return Some(updated);
+    }
+    let crlf = doc.contains("\r\n");
+    let nl = if crlf { "\r\n" } else { "\n" };
+    let unit = indent_unit(doc);
+    let element = format!("<{name}>{}</{name}>", escape(value));
+
+    match locate(doc, parent)? {
+        Found::SelfClosed { start, end } => {
+            let indent = line_indent(doc, start);
+            Some(format!(
+                "{}<{parent}>{nl}{indent}{unit}{element}{nl}{indent}</{parent}>{}",
+                &doc[..start],
+                &doc[end..]
+            ))
+        }
+        Found::Body { end, .. } => {
+            // `end` apunta a `</parent>`; se inserta al principio de su línea.
+            let line_start = doc[..end].rfind('\n').map_or(0, |i| i + 1);
+            let indent = line_indent(doc, end);
+            let insert_at = if doc[line_start..end].trim().is_empty() {
+                line_start
+            } else {
+                end
+            };
+            let (before, after) = doc.split_at(insert_at);
+            let prefix = if insert_at == end { nl } else { "" };
+            Some(format!(
+                "{before}{prefix}{indent}{unit}{element}{nl}{after}"
+            ))
+        }
+    }
+}
+
+/// Unidad de indentación del documento: la de la primera línea indentada.
+fn indent_unit(doc: &str) -> String {
+    doc.lines()
+        .map(|l| l.chars().take_while(|c| *c == ' ').count())
+        .find(|&n| n > 0)
+        .map_or_else(|| "  ".to_owned(), |n| " ".repeat(n))
+}
+
+/// Espacios al principio de la línea que contiene `pos`.
+fn line_indent(doc: &str, pos: usize) -> String {
+    let line_start = doc[..pos].rfind('\n').map_or(0, |i| i + 1);
+    doc[line_start..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect()
+}
+
 /// Resuelve las entidades XML predefinidas y las numéricas.
 pub(crate) fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -185,6 +242,45 @@ mod tests {
         let out = replace_text(PEDAL_STYLE, "Metadata", "x").unwrap();
         assert!(out.contains("<Metadata>x</Metadata>"));
         assert_eq!(replace_text(PEDAL_STYLE, "NoExiste", "x"), None);
+    }
+
+    #[test]
+    fn set_text_replaces_when_the_tag_exists() {
+        let out = set_text(PC_STYLE, "Artist", "Hendrix", "Metadata").unwrap();
+        assert_eq!(
+            out,
+            PC_STYLE.replace("<Artist></Artist>", "<Artist>Hendrix</Artist>")
+        );
+    }
+
+    #[test]
+    fn set_text_expands_a_self_closed_parent_in_pedal_style() {
+        let out = set_text(PEDAL_STYLE, "Artist", "Hendrix", "Metadata").unwrap();
+        assert!(
+            out.contains("    <Metadata>\n        <Artist>Hendrix</Artist>\n    </Metadata>\n"),
+            "{out}"
+        );
+        assert_eq!(text(&out, "ID").unwrap(), "ccc");
+    }
+
+    #[test]
+    fn set_text_appends_inside_an_existing_parent() {
+        let out = set_text(PC_STYLE, "Genre", "Blues", "Metadata").unwrap();
+        assert!(
+            out.contains("    <Artist></Artist>\n    <Genre>Blues</Genre>\n  </Metadata>"),
+            "{out}"
+        );
+        let crlf = PC_STYLE.replace('\n', "\r\n");
+        let out = set_text(&crlf, "Genre", "Blues", "Metadata").unwrap();
+        assert!(
+            out.contains("    <Genre>Blues</Genre>\r\n  </Metadata>"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn set_text_without_parent_is_none() {
+        assert_eq!(set_text(PEDAL_STYLE, "X", "1", "NoExiste"), None);
     }
 
     #[test]

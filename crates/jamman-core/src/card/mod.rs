@@ -218,7 +218,8 @@ impl Card {
         self.root.join(patch_dir_name(slot))
     }
 
-    fn audio_path(&self, slot: Slot) -> PathBuf {
+    /// Ruta del audio (`phrase.wav`) de una posición, exista o no.
+    pub fn audio_path(&self, slot: Slot) -> PathBuf {
         self.patch_dir(slot).join(PHRASE_DIR).join(AUDIO_FILE)
     }
 

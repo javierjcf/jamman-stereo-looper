@@ -2,6 +2,8 @@
 //!
 //! Uso: `jamman [--port <PUERTO>] <comando> [argumentos]`. Ver `jamman help`.
 
+mod args;
+mod card_cmd;
 mod port;
 
 use std::error::Error;
@@ -11,13 +13,16 @@ use std::process::ExitCode;
 use jamman_core::protocol::Client;
 use jamman_core::{audio, device};
 
-const HELP: &str = "\
+use args::take_option;
+
+const HELP_PEDAL: &str = "\
 jamman — gestor del DigiTech JamMan Stereo (EXPERIMENTAL: protocolo sin validar)
 
 USO:
     jamman [--port <PUERTO>] <comando> [argumentos]
+    jamman card <subcomando> ...        (solo la tarjeta, sin pedal)
 
-COMANDOS:
+COMANDOS DEL PEDAL (requieren conexión USB):
     about                 Datos conocidos del dispositivo
     ports                 Lista los puertos serie y marca los del JamMan
     who-am-i              Identificación que devuelve el pedal
@@ -26,7 +31,9 @@ COMANDOS:
     get <ruta> <destino>  Descarga un fichero del pedal
     help                  Esta ayuda
 
-Si no se indica --port se usa el primer puerto con VID:PID 1210:0020.";
+Si no se indica --port se usa el primer puerto con VID:PID 1210:0020.
+
+";
 
 fn main() -> ExitCode {
     match run() {
@@ -42,13 +49,17 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let port_name = take_option(&mut args, "--port")?;
 
+    if args.first().map(String::as_str) == Some("card") {
+        return card_cmd::run(args.split_off(1));
+    }
+
     let Some((command, rest)) = args.split_first() else {
-        println!("{HELP}");
+        println!("{}{}", HELP_PEDAL, card_cmd::HELP);
         return Ok(());
     };
 
     match (command.as_str(), rest) {
-        ("help" | "--help" | "-h", _) => println!("{HELP}"),
+        ("help" | "--help" | "-h", _) => println!("{}{}", HELP_PEDAL, card_cmd::HELP),
         ("about", []) => about(),
         ("ports", []) => port::print_ports()?,
         ("who-am-i", []) => {
@@ -72,7 +83,13 @@ fn run() -> Result<(), Box<dyn Error>> {
             fs::write(local, &data)?;
             println!("{} bytes guardados en {local}", data.len());
         }
-        _ => return Err(format!("comando o argumentos no válidos\n\n{HELP}").into()),
+        _ => {
+            return Err(format!(
+                "comando o argumentos no válidos\n\n{HELP_PEDAL}{}",
+                card_cmd::HELP
+            )
+            .into());
+        }
     }
     Ok(())
 }
@@ -81,19 +98,6 @@ fn connect(
     name: Option<String>,
 ) -> Result<Client<Box<dyn serialport::SerialPort>>, Box<dyn Error>> {
     Ok(Client::new(port::open(name)?))
-}
-
-/// Extrae `--opción valor` de los argumentos si está presente.
-fn take_option(args: &mut Vec<String>, name: &str) -> Result<Option<String>, String> {
-    let Some(i) = args.iter().position(|a| a == name) else {
-        return Ok(None);
-    };
-    if i + 1 >= args.len() {
-        return Err(format!("falta el valor de {name}"));
-    }
-    let value = args.remove(i + 1);
-    args.remove(i);
-    Ok(Some(value))
 }
 
 fn about() {
@@ -106,35 +110,4 @@ fn about() {
         audio::BITS_PER_SAMPLE,
         audio::CHANNELS,
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::take_option;
-
-    fn args(v: &[&str]) -> Vec<String> {
-        v.iter().map(ToString::to_string).collect()
-    }
-
-    #[test]
-    fn extracts_the_option_and_its_value() {
-        let mut a = args(&["ls", "--port", "/dev/ttyACM0", "/"]);
-        assert_eq!(
-            take_option(&mut a, "--port").unwrap().as_deref(),
-            Some("/dev/ttyACM0")
-        );
-        assert_eq!(a, ["ls", "/"]);
-    }
-
-    #[test]
-    fn missing_option_is_none() {
-        let mut a = args(&["about"]);
-        assert_eq!(take_option(&mut a, "--port").unwrap(), None);
-    }
-
-    #[test]
-    fn option_without_value_is_an_error() {
-        let mut a = args(&["ls", "--port"]);
-        assert!(take_option(&mut a, "--port").is_err());
-    }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "jamman-cli"
+description = "Herramienta de línea de comandos para el DigiTech JamMan Stereo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "jamman"
+path = "src/main.rs"
+
+[dependencies]
+jamman-core = { path = "../jamman-core" }

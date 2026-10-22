@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "jamman-cli"
+version = "0.1.0"
+dependencies = [
+ "jamman-core",
+]
+
+[[package]]
 name = "jamman-core"
 version = "0.1.0"

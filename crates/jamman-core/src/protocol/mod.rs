@@ -4,6 +4,7 @@
 //! dato. Esta capa no hace E/S: solo construye y descifra mensajes.
 
 pub mod header;
+pub mod request;
 pub(crate) mod wire;
 
 pub use header::{HEADER_LEN, Header};

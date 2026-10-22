@@ -4,6 +4,7 @@
 //! más adelante, la GUI son capas finas por encima. Los datos de este
 //! módulo proceden del análisis del software original; ver `docs/`.
 
+pub mod audio;
 pub mod device;
 pub mod error;
 

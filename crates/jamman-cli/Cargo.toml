@@ -16,3 +16,4 @@ path = "src/main.rs"
 
 [dependencies]
 jamman-core = { path = "../jamman-core" }
+serialport = "4.10.1"

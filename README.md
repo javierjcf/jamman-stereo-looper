@@ -27,6 +27,18 @@ cargo test
 cargo clippy --all-targets
 ```
 
+## Uso (experimental)
+
+```bash
+cargo run -p jamman-cli -- ports          # busca el pedal (USB 1210:0020)
+cargo run -p jamman-cli -- who-am-i       # identificación
+cargo run -p jamman-cli -- ls /           # lista una carpeta del pedal
+cargo run -p jamman-cli -- get <ruta> <destino>
+```
+
+En Linux el pedal aparece como `/dev/ttyACM*`. Tu usuario necesita permiso sobre
+ese dispositivo (grupo `uucp` en Arch, `dialout` en Debian/Ubuntu).
+
 ## Documentación
 
 - [Proceso seguido](docs/01-proceso.md)

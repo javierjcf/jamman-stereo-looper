@@ -1,0 +1,7 @@
+# Compilación
+target/
+
+# Material propietario de DigiTech usado solo para análisis (por si se copia aquí).
+extracted/
+*.exe
+*.pdf

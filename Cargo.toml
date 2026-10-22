@@ -21,3 +21,7 @@ all = { level = "warn", priority = -1 }
 # compilando rápido.
 [profile.dev.package."*"]
 opt-level = 3
+
+# El procesado de audio propio también: sin optimizar es decenas de veces más lento.
+[profile.dev.package.jamman-audio]
+opt-level = 3

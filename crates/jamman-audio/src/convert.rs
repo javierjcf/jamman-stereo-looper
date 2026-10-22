@@ -191,9 +191,8 @@ fn write_wav(dest: &Path, samples: &[i16]) -> Result<(), AudioError> {
     w.write_all(&BITS_PER_SAMPLE.to_le_bytes())?;
     w.write_all(b"data")?;
     w.write_all(&data_len.to_le_bytes())?;
-    for s in samples {
-        w.write_all(&s.to_le_bytes())?;
-    }
+    let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    w.write_all(&bytes)?;
     w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
     Ok(())
 }

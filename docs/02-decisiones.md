@@ -97,3 +97,15 @@ duradero**; ninguna funcionalidad sin necesidad real.
 - `rust-version` sube a 1.95 para usar egui/eframe 0.37, la versión actual.
 - `JAMMAN_SCREENSHOT` guarda una captura de la ventana: sirve para revisar el
   diseño y generar la imagen del README sin herramientas externas.
+
+## D17. Explorador del equipo al estilo SFTP
+- El panel izquierdo muestra el equipo y el centro la tarjeta: las
+  transferencias se hacen con botones de dirección («➡ Añadir», «⬅ Exportar»)
+  sobre la selección, como en los clientes SFTP. Sin arrastrar entre paneles,
+  para no complicarlo.
+- Solo se listan carpetas y audio compatible; los ocultos no.
+- La exportación nunca sobrescribe (añade «(2)»…) y sanea los nombres para que
+  valgan en Windows y Linux.
+- Selección múltiple genérica (`selection.rs`) compartida por las dos listas; el
+  bucle "principal" (el último pulsado) es el que se edita y reproduce.
+- La ruta se muestra con la carpeta personal abreviada como `~`.

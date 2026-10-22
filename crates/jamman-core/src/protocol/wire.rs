@@ -103,11 +103,6 @@ impl<'a> Reader<'a> {
         let bytes = self.take(len)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
     }
-
-    /// Bytes que quedan sin leer.
-    pub(crate) fn remaining(&self) -> &'a [u8] {
-        self.data
-    }
 }
 
 #[cfg(test)]
@@ -143,7 +138,7 @@ mod tests {
         assert_eq!(r.u32().unwrap(), 70_000);
         assert_eq!(r.i64().unwrap(), -9);
         assert_eq!(r.string().unwrap(), "áé");
-        assert!(r.remaining().is_empty());
+        assert!(r.u8().is_err(), "no deben quedar bytes");
     }
 
     #[test]

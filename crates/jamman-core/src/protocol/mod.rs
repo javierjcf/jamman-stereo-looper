@@ -5,6 +5,7 @@
 
 pub mod header;
 pub mod request;
+pub mod response;
 pub(crate) mod wire;
 
 pub use header::{HEADER_LEN, Header};

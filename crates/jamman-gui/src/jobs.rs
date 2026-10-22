@@ -143,3 +143,88 @@ pub fn spawn_waveform(
     });
     rx
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn collect(rx: &Receiver<ImportEvent>) -> Vec<ImportEvent> {
+        let mut events = Vec::new();
+        loop {
+            let event = rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("la importación no terminó");
+            let done = matches!(event, ImportEvent::Done);
+            events.push(event);
+            if done {
+                return events;
+            }
+        }
+    }
+
+    #[test]
+    fn import_converts_valid_files_and_reports_invalid_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = Card::create(dir.path()).unwrap();
+        let mp3 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../jamman-audio/tests/fixtures/tono-mono-22k.mp3");
+        let junk = dir.path().join("roto.mp3");
+        std::fs::write(&junk, b"no es audio").unwrap();
+
+        let rx = spawn_import(
+            card.clone(),
+            vec![mp3, junk],
+            false,
+            egui::Context::default(),
+        );
+        let events = collect(&rx);
+
+        let imported: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ImportEvent::Imported(slot) => Some(slot.get()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(imported, [1], "el MP3 va a la primera posición libre");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ImportEvent::Failed { file, .. } if file == "roto.mp3"))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ImportEvent::Progress(p) if *p >= 1.0))
+        );
+
+        let entry = card.read(Slot::new(1).unwrap()).unwrap();
+        assert_eq!(entry.patch.name, "tono-mono-22k");
+        assert_eq!(entry.patch.description, "Imported from tono-mono-22k.mp3");
+        entry.audio.check_pedal_format().unwrap();
+    }
+
+    #[test]
+    fn import_into_a_full_card_fails_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = Card::create(dir.path()).unwrap();
+        for n in 1..=99 {
+            std::fs::create_dir(card.root().join(format!("Patch{n:02}"))).unwrap();
+        }
+        let mp3 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../jamman-audio/tests/fixtures/tono-mono-22k.mp3");
+        let events = collect(&spawn_import(
+            card,
+            vec![mp3],
+            false,
+            egui::Context::default(),
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ImportEvent::Failed { error, .. } if error.contains("llena")))
+        );
+    }
+}

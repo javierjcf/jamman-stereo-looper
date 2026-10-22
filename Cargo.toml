@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/jamman-core", "crates/jamman-audio", "crates/jamman-cli"]
+members = ["crates/jamman-core", "crates/jamman-audio", "crates/jamman-cli", "crates/jamman-gui"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 publish = false
 

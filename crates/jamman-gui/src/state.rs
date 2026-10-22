@@ -120,16 +120,6 @@ impl Library {
         self.reload()
     }
 
-    /// Cierra la tarjeta.
-    pub fn close(&mut self) {
-        *self = Self {
-            filter: std::mem::take(&mut self.filter),
-            sort: self.sort,
-            sort_desc: self.sort_desc,
-            ..Self::default()
-        };
-    }
-
     /// Tarjeta abierta.
     pub fn card(&self) -> Option<&Card> {
         self.card.as_ref()
@@ -271,9 +261,7 @@ mod tests {
         let mut out = b"RIFF".to_vec();
         out.extend_from_slice(&(36 + n as u32).to_le_bytes());
         out.extend_from_slice(b"WAVEfmt ");
-        for v in [16u32] {
-            out.extend_from_slice(&v.to_le_bytes());
-        }
+        out.extend_from_slice(&16u32.to_le_bytes());
         out.extend_from_slice(&1u16.to_le_bytes());
         out.extend_from_slice(&2u16.to_le_bytes());
         out.extend_from_slice(&44_100u32.to_le_bytes());
@@ -379,14 +367,5 @@ mod tests {
         assert_eq!(broken.name(), "(dañado)");
         lib.select(Some(slot(7)));
         assert!(lib.draft.is_none());
-    }
-
-    #[test]
-    fn close_keeps_the_view_preferences() {
-        let (_d, mut lib) = library_with(&[(1, "x", 4)]);
-        lib.sort_by(SortKey::Bpm);
-        lib.close();
-        assert!(lib.card().is_none() && lib.rows().is_empty());
-        assert_eq!(lib.sort, SortKey::Bpm);
     }
 }

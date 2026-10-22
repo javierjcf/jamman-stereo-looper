@@ -38,3 +38,21 @@ duradero**; ninguna funcionalidad sin necesidad real.
 - `edition = "2024"`, `resolver = "3"`, `rust-version = "1.90"`.
 - `unsafe_code = "forbid"`, `missing_docs = "warn"` y `clippy::all` como aviso.
 - Se actualizó la toolchain de 1.93 a 1.99.1 con `rustup update stable`.
+
+## D8. Cliente genérico sobre `Read + Write`
+- `Client<T: Read + Write>` no conoce el puerto serie. Se prueba con un
+  transporte en memoria y se puede validar el protocolo entero sin pedal.
+- El puerto real (crate `serialport`) se añade solo en la CLI.
+
+## D9. Lo no confirmado se documenta, no se oculta
+- Cada campo cuyo significado es una suposición lleva "hipótesis" en su
+  documentación y en `docs/03-protocolo.md`. Se prefiere un nombre neutro
+  (`first`, `second`, `flag`) a uno engañoso.
+- Los tests fijan lo **observado** (tamaños de carga, IDs, orden de campos).
+
+## D10. Sin parseo de argumentos externo en la CLI
+- La CLI tiene pocos subcomandos; se usa `std::env::args`. Se reconsiderará
+  `clap` si crece.
+
+## D11. Firmware fuera de alcance
+- Escribir firmware puede inutilizar el pedal. No se implementa.

@@ -1,0 +1,13 @@
+[package]
+name = "jamman-core"
+description = "Protocolo y formatos del pedal DigiTech JamMan Stereo (sin interfaz gráfica)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

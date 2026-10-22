@@ -13,6 +13,7 @@
 //! ```
 
 pub mod meta;
+pub mod options;
 #[cfg(test)]
 pub(crate) mod testutil;
 pub mod wav;

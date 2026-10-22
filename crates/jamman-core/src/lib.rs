@@ -5,6 +5,7 @@
 //! módulo proceden del análisis del software original; ver `docs/`.
 
 pub mod audio;
+pub mod card;
 pub mod device;
 pub mod error;
 pub mod protocol;

@@ -34,7 +34,19 @@ pub enum Error {
         /// Tipo de mensaje recibido.
         got: u16,
     },
-    /// Error de entrada/salida del transporte.
+    /// El fichero no es un WAV válido o está dañado.
+    InvalidWav(&'static str),
+    /// El audio no tiene el formato que acepta el pedal.
+    UnsupportedAudio(String),
+    /// La carpeta indicada no contiene una tarjeta del JamMan (`JamManStereo/`).
+    NotACard(std::path::PathBuf),
+    /// No hay ningún bucle en esa posición de la tarjeta.
+    SlotNotFound(u8),
+    /// Ya hay un bucle en esa posición de la tarjeta.
+    SlotOccupied(u8),
+    /// Los metadatos (`patch.xml` o `phrase.xml`) están incompletos o dañados.
+    InvalidMetadata(String),
+    /// Error de entrada/salida.
     Io(std::io::Error),
 }
 
@@ -63,6 +75,16 @@ impl fmt::Display for Error {
                     "respuesta inesperada: se esperaba {expected}, llegó el tipo {got:#06x}"
                 )
             }
+            Self::InvalidWav(why) => write!(f, "WAV inválido: {why}"),
+            Self::UnsupportedAudio(why) => write!(f, "audio no admitido por el pedal: {why}"),
+            Self::NotACard(p) => write!(
+                f,
+                "{} no contiene una tarjeta JamMan (falta JamManStereo/)",
+                p.display()
+            ),
+            Self::SlotNotFound(n) => write!(f, "no hay ningún bucle en la posición {n}"),
+            Self::SlotOccupied(n) => write!(f, "la posición {n} ya está ocupada"),
+            Self::InvalidMetadata(why) => write!(f, "metadatos inválidos: {why}"),
             Self::Io(e) => write!(f, "error de E/S: {e}"),
         }
     }

@@ -168,8 +168,10 @@ dependencies = [
 name = "jamman-cli"
 version = "0.1.0"
 dependencies = [
+ "jamman-audio",
  "jamman-core",
  "serialport",
+ "tempfile",
 ]
 
 [[package]]

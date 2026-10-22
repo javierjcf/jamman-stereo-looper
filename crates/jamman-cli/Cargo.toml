@@ -15,5 +15,7 @@ name = "jamman"
 path = "src/main.rs"
 
 [dependencies]
+jamman-audio = { version = "0.1.0", path = "../jamman-audio" }
 jamman-core = { path = "../jamman-core" }
 serialport = "4.10.1"
+tempfile = "3.27.0"

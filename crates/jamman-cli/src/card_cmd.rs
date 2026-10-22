@@ -4,7 +4,7 @@ use std::error::Error;
 use std::io::{self, Write};
 use std::path::Path;
 
-use jamman_core::Error as CoreError;
+use jamman_audio::{ConvertOptions, convert_to_pedal_wav, needs_conversion};
 use jamman_core::card::Card;
 use jamman_core::device::Slot;
 
@@ -16,8 +16,9 @@ const EJECT_HINT: &str = "Expulsa/desmonta la tarjeta antes de sacarla del orden
 pub const HELP: &str = "\
 COMANDOS DE TARJETA (no necesitan el pedal):
     card ls <tarjeta>                          Lista los bucles de la tarjeta
-    card add <tarjeta> <audio.wav> [--slot N] [--name TEXTO]
-                                               Añade un WAV (44,1 kHz, 16 bit, estéreo)
+    card add <tarjeta> <audio> [--slot N] [--name TEXTO] [--normalize]
+                                               Añade audio (WAV, MP3, FLAC, OGG, AIFF, M4A);
+                                               lo convierte al formato del pedal si hace falta
     card rename <tarjeta> <N> <nombre>         Cambia el nombre de un bucle
     card export <tarjeta> <N> <destino.wav>    Copia el audio de un bucle
     card rm <tarjeta> <N> [--yes]              Borra un bucle (pide confirmación)
@@ -29,6 +30,7 @@ pub fn run(mut args: Vec<String>) -> Result<(), Box<dyn Error>> {
     let slot_opt = take_option(&mut args, "--slot")?;
     let name_opt = take_option(&mut args, "--name")?;
     let yes = take_flag(&mut args, "--yes");
+    let normalize = take_flag(&mut args, "--normalize");
 
     let Some((command, rest)) = args.split_first() else {
         return Err(format!("falta el subcomando de card\n\n{HELP}").into());
@@ -40,6 +42,7 @@ pub fn run(mut args: Vec<String>) -> Result<(), Box<dyn Error>> {
             Path::new(wav),
             slot_opt.as_deref(),
             name_opt.as_deref(),
+            normalize,
         ),
         ("rename", [card, slot, name]) => {
             let slot = parse_slot(slot)?;
@@ -125,9 +128,10 @@ fn list(card: &Card) -> Result<(), Box<dyn Error>> {
 
 fn add(
     card: &Card,
-    wav: &Path,
+    source: &Path,
     slot: Option<&str>,
     name: Option<&str>,
+    normalize: bool,
 ) -> Result<(), Box<dyn Error>> {
     let slot = match slot {
         Some(text) => parse_slot(text)?,
@@ -137,19 +141,31 @@ fn add(
     };
     let name = name
         .map(str::to_owned)
-        .or_else(|| wav.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .or_else(|| source.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_default();
 
-    let entry = match card.import_wav(slot, wav, &name) {
-        Ok(entry) => entry,
-        Err(e @ CoreError::UnsupportedAudio(_)) => {
-            return Err(format!(
-                "{e}\n\nConviértelo antes, por ejemplo con ffmpeg:\n    ffmpeg -i entrada.mp3 -ar 44100 -ac 2 -sample_fmt s16 salida.wav"
-            )
-            .into());
-        }
-        Err(e) => return Err(e.into()),
+    // El directorio temporal se borra solo al salir de la función.
+    let workdir = tempfile::tempdir()?;
+    let wav = if normalize || needs_conversion(source) {
+        let dest = workdir.path().join("convertido.wav");
+        print!("Convirtiendo {}… ", source.display());
+        io::stdout().flush()?;
+        let report = convert_to_pedal_wav(source, &dest, &ConvertOptions { normalize }, |_| {})?;
+        println!(
+            "{} Hz, {} canal(es) → 44100 Hz estéreo 16 bit{}",
+            report.source_rate,
+            report.source_channels,
+            report
+                .gain_db
+                .map(|g| format!(", normalizado {g:+.1} dB"))
+                .unwrap_or_default()
+        );
+        dest
+    } else {
+        source.to_path_buf()
     };
+
+    let entry = card.import_wav_from(slot, &wav, &name, source)?;
     println!(
         "Añadido en la posición {:02}: {:?} ({})\n{EJECT_HINT}",
         entry.slot.get(),

@@ -196,7 +196,11 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
                 move_to = Slot::new(target).ok();
             }
         });
-        if ui.button("⬇ Exportar WAV…").clicked() {
+        if ui
+            .button("⬅ Exportar a la carpeta del explorador")
+            .on_hover_text("Copia el WAV de este bucle a la carpeta abierta en el explorador")
+            .clicked()
+        {
             export = true;
         }
         if ui
@@ -215,10 +219,10 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         app.lib.discard_draft();
     }
     if export {
-        app.export(slot);
+        app.export_to_browser(vec![slot], ui.ctx());
     }
     if delete {
-        app.confirm_delete = Some(slot);
+        app.confirm_delete = Some(vec![slot]);
     }
     if let Some(to) = move_to {
         if app.lib.has_unsaved_changes() {

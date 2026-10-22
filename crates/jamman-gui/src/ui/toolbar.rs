@@ -1,4 +1,4 @@
-//! Barra superior: título, añadir, búsqueda y tema.
+//! Barra superior: título, explorador, añadir, búsqueda y tema.
 
 use eframe::egui::{self, RichText};
 
@@ -17,29 +17,23 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         ui.label(RichText::new("Looper").size(18.0));
         ui.separator();
 
-        let has_card = app.lib.card().is_some();
+        ui.toggle_value(&mut app.show_browser, "📁 Explorador")
+            .on_hover_text("Muestra u oculta el explorador de ficheros del equipo");
         let add = egui::Button::new(RichText::new("＋ Añadir canciones…").strong());
         if ui
-            .add_enabled(has_card && app.import.is_none(), add)
-            .on_hover_text("También puedes arrastrar ficheros o carpetas a la ventana")
+            .add_enabled(app.can_transfer(), add)
+            .on_hover_text("También puedes usar el explorador o arrastrar ficheros a la ventana")
             .clicked()
         {
             app.pick_and_import(ui.ctx());
-        }
-        if ui
-            .add_enabled(has_card, egui::Button::new("⟳ Recargar"))
-            .on_hover_text("Vuelve a leer la tarjeta")
-            .clicked()
-        {
-            app.reload();
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             egui::widgets::global_theme_preference_buttons(ui);
             ui.add(
                 egui::TextEdit::singleline(&mut app.lib.filter)
-                    .hint_text("🔍 Buscar por nombre, artista, nº…")
-                    .desired_width(260.0),
+                    .hint_text("🔍 Buscar en la tarjeta…")
+                    .desired_width(240.0),
             );
         });
     });

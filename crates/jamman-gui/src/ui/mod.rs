@@ -1,9 +1,13 @@
 //! Vistas de `egui`. Solo dibujan y llaman a las acciones de [`JamApp`].
+//!
+//! Disposición, como en un cliente SFTP: explorador del equipo a la izquierda,
+//! tarjeta en el centro y ajustes del bucle seleccionado a la derecha.
 
+mod browser;
+mod card_bar;
 mod details;
 mod dialogs;
 mod player_bar;
-mod sidebar;
 mod status_bar;
 mod table;
 mod toolbar;
@@ -11,7 +15,16 @@ mod toolbar;
 use eframe::egui::{self, Align2, Color32, FontId, Key, Modifiers};
 
 use crate::app::JamApp;
+use crate::selection::ClickMods;
 use crate::theme;
+
+/// Modificadores de selección del clic actual (Ctrl/Cmd y Mayús).
+pub fn click_mods(ui: &egui::Ui) -> ClickMods {
+    ui.input(|i| ClickMods {
+        toggle: i.modifiers.command,
+        range: i.modifiers.shift,
+    })
+}
 
 /// Dibuja la ventana completa.
 pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
@@ -24,17 +37,24 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         egui::Panel::top("player").show(ui, |ui| player_bar::show(app, ui));
     }
     egui::Panel::bottom("status").show(ui, |ui| status_bar::show(app, ui));
-    egui::Panel::left("sidebar")
-        .resizable(false)
-        .exact_size(260.0)
-        .show(ui, |ui| sidebar::show(app, ui));
+    if app.show_browser {
+        egui::Panel::left("browser")
+            .resizable(true)
+            .default_size(330.0)
+            .size_range(260.0..=640.0)
+            .show(ui, |ui| browser::show(app, ui));
+    }
     if app.lib.draft.is_some() {
         egui::Panel::right("details")
-            .default_size(340.0)
-            .size_range(300.0..=520.0)
+            .default_size(310.0)
+            .size_range(280.0..=520.0)
             .show(ui, |ui| details::show(app, ui));
     }
-    egui::CentralPanel::default().show(ui, |ui| table::show(app, ui));
+    egui::CentralPanel::default().show(ui, |ui| {
+        card_bar::show(app, ui);
+        ui.separator();
+        table::show(app, ui);
+    });
 
     dialogs::show(app, &ctx);
     paint_drop_hint(app, &ctx);
@@ -65,7 +85,10 @@ fn handle_shortcuts(app: &mut JamApp, ctx: &egui::Context) {
         app.toggle_play();
     }
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
-        app.confirm_delete = app.lib.selected();
+        app.ask_delete_selection();
+    }
+    if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) && app.lib.card().is_some() {
+        app.lib.select_all_visible();
     }
 }
 

@@ -1,8 +1,8 @@
-//! Trabajos en segundo plano: importar (y convertir) audio y calcular formas
-//! de onda, sin bloquear la interfaz. Cada trabajo corre en su propio hilo y
+//! Trabajos en segundo plano: importar (y convertir) audio, exportar bucles y
+//! calcular formas de onda, sin bloquear la interfaz. Cada trabajo corre en su propio hilo y
 //! comunica su avance por un canal; tras cada mensaje se pide repintar.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -11,9 +11,9 @@ use jamman_audio::{ConvertOptions, convert_to_pedal_wav, needs_conversion};
 use jamman_core::card::Card;
 use jamman_core::device::Slot;
 
-/// Avance de una importación.
+/// Avance de una transferencia (importación o exportación).
 #[derive(Debug)]
-pub enum ImportEvent {
+pub enum TransferEvent {
     /// Empieza un fichero (`index` desde 0).
     Started {
         /// Posición en la lista.
@@ -27,6 +27,8 @@ pub enum ImportEvent {
     Progress(f32),
     /// Fichero importado en esa posición.
     Imported(Slot),
+    /// Bucle exportado a esa ruta.
+    Exported(PathBuf),
     /// Fichero que no se pudo importar.
     Failed {
         /// Nombre del fichero.
@@ -34,7 +36,7 @@ pub enum ImportEvent {
         /// Motivo.
         error: String,
     },
-    /// Fin de la importación.
+    /// Fin de la transferencia.
     Done,
 }
 
@@ -51,7 +53,7 @@ pub fn spawn_import(
     files: Vec<PathBuf>,
     normalize: bool,
     ctx: egui::Context,
-) -> Receiver<ImportEvent> {
+) -> Receiver<TransferEvent> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let total = files.len();
@@ -63,18 +65,18 @@ pub fn spawn_import(
             emit(
                 &tx,
                 &ctx,
-                ImportEvent::Started {
+                TransferEvent::Started {
                     index,
                     total,
                     file: file.clone(),
                 },
             );
             match import_one(&card, &path, normalize, &tx, &ctx) {
-                Ok(slot) => emit(&tx, &ctx, ImportEvent::Imported(slot)),
-                Err(error) => emit(&tx, &ctx, ImportEvent::Failed { file, error }),
+                Ok(slot) => emit(&tx, &ctx, TransferEvent::Imported(slot)),
+                Err(error) => emit(&tx, &ctx, TransferEvent::Failed { file, error }),
             }
         }
-        emit(&tx, &ctx, ImportEvent::Done);
+        emit(&tx, &ctx, TransferEvent::Done);
     });
     rx
 }
@@ -83,7 +85,7 @@ fn import_one(
     card: &Card,
     path: &std::path::Path,
     normalize: bool,
-    tx: &Sender<ImportEvent>,
+    tx: &Sender<TransferEvent>,
     ctx: &egui::Context,
 ) -> Result<Slot, String> {
     let slot = card
@@ -102,7 +104,7 @@ fn import_one(
             // Un mensaje por cada 2 % es suficiente para la barra.
             if p - last >= 0.02 || p >= 1.0 {
                 last = p;
-                emit(tx, ctx, ImportEvent::Progress(p));
+                emit(tx, ctx, TransferEvent::Progress(p));
             }
         })
         .map_err(|e| e.to_string())?;
@@ -113,6 +115,86 @@ fn import_one(
     card.import_wav_from(slot, &wav, &name, path)
         .map(|e| e.slot)
         .map_err(|e| e.to_string())
+}
+
+/// Nombre de fichero para exportar un bucle: `NN Nombre.wav`, sin los
+/// caracteres que no admiten Windows o Linux.
+pub fn export_file_name(slot: Slot, name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let clean = clean.trim().trim_end_matches('.').trim();
+    if clean.is_empty() {
+        format!("{:02} Bucle.wav", slot.get())
+    } else {
+        format!("{:02} {clean}.wav", slot.get())
+    }
+}
+
+/// `dir/file`, o `dir/stem (2).ext`, `(3)`… si ya existe: nunca se pisa nada.
+pub fn unique_path(dir: &Path, file: &str) -> PathBuf {
+    let first = dir.join(file);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = file.rsplit_once('.').unwrap_or((file, ""));
+    (2..)
+        .map(|n| {
+            if ext.is_empty() {
+                dir.join(format!("{stem} ({n})"))
+            } else {
+                dir.join(format!("{stem} ({n}).{ext}"))
+            }
+        })
+        .find(|p| !p.exists())
+        .unwrap_or(first)
+}
+
+/// Exporta el audio de varios bucles `(posición, nombre)` a `dir`.
+pub fn spawn_export(
+    card: Card,
+    loops: Vec<(Slot, String)>,
+    dir: PathBuf,
+    ctx: egui::Context,
+) -> Receiver<TransferEvent> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let total = loops.len();
+        for (index, (slot, name)) in loops.into_iter().enumerate() {
+            let file = export_file_name(slot, &name);
+            emit(
+                &tx,
+                &ctx,
+                TransferEvent::Started {
+                    index,
+                    total,
+                    file: file.clone(),
+                },
+            );
+            let dest = unique_path(&dir, &file);
+            match card.export_wav(slot, &dest) {
+                Ok(_) => {
+                    emit(&tx, &ctx, TransferEvent::Progress(1.0));
+                    emit(&tx, &ctx, TransferEvent::Exported(dest));
+                }
+                Err(e) => emit(
+                    &tx,
+                    &ctx,
+                    TransferEvent::Failed {
+                        file,
+                        error: e.to_string(),
+                    },
+                ),
+            }
+        }
+        emit(&tx, &ctx, TransferEvent::Done);
+    });
+    rx
 }
 
 /// Resultado del cálculo de una forma de onda.
@@ -150,13 +232,87 @@ mod tests {
 
     use super::*;
 
-    fn collect(rx: &Receiver<ImportEvent>) -> Vec<ImportEvent> {
+    #[test]
+    fn export_names_are_safe_on_every_system() {
+        let s = Slot::new(7).unwrap();
+        assert_eq!(
+            export_file_name(s, "AC/DC: Back in Black?"),
+            "07 AC_DC_ Back in Black_.wav"
+        );
+        assert_eq!(
+            export_file_name(s, "  fin con puntos... "),
+            "07 fin con puntos.wav"
+        );
+        assert_eq!(export_file_name(s, ""), "07 Bucle.wav");
+    }
+
+    #[test]
+    fn unique_path_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(unique_path(dir.path(), "a.wav"), dir.path().join("a.wav"));
+        std::fs::write(dir.path().join("a.wav"), b"").unwrap();
+        std::fs::write(dir.path().join("a (2).wav"), b"").unwrap();
+        assert_eq!(
+            unique_path(dir.path(), "a.wav"),
+            dir.path().join("a (3).wav")
+        );
+    }
+
+    #[test]
+    fn export_copies_each_loop_without_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = Card::create(&dir.path().join("sd")).unwrap();
+        let mp3 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../jamman-audio/tests/fixtures/tono-mono-22k.mp3");
+        collect(&spawn_import(
+            card.clone(),
+            vec![mp3.clone(), mp3],
+            false,
+            egui::Context::default(),
+        ));
+        let out = dir.path().join("salida");
+        std::fs::create_dir(&out).unwrap();
+        std::fs::write(out.join("01 Uno.wav"), b"ya estaba").unwrap();
+
+        let loops = vec![
+            (Slot::new(1).unwrap(), "Uno".to_owned()),
+            (Slot::new(2).unwrap(), "Dos".to_owned()),
+            (Slot::new(9).unwrap(), "No existe".to_owned()),
+        ];
+        let events = collect(&spawn_export(
+            card.clone(),
+            loops,
+            out.clone(),
+            egui::Context::default(),
+        ));
+
+        let exported: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                TransferEvent::Exported(p) => {
+                    Some(p.file_name().unwrap().to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(exported, ["01 Uno (2).wav", "02 Dos.wav"]);
+        assert_eq!(std::fs::read(out.join("01 Uno.wav")).unwrap(), b"ya estaba");
+        assert_eq!(
+            std::fs::read(out.join("02 Dos.wav")).unwrap(),
+            std::fs::read(card.audio_path(Slot::new(2).unwrap())).unwrap()
+        );
+        assert!(events.iter().any(
+            |e| matches!(e, TransferEvent::Failed { file, .. } if file == "09 No existe.wav")
+        ));
+    }
+
+    fn collect(rx: &Receiver<TransferEvent>) -> Vec<TransferEvent> {
         let mut events = Vec::new();
         loop {
             let event = rx
                 .recv_timeout(Duration::from_secs(30))
                 .expect("la importación no terminó");
-            let done = matches!(event, ImportEvent::Done);
+            let done = matches!(event, TransferEvent::Done);
             events.push(event);
             if done {
                 return events;
@@ -184,7 +340,7 @@ mod tests {
         let imported: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                ImportEvent::Imported(slot) => Some(slot.get()),
+                TransferEvent::Imported(slot) => Some(slot.get()),
                 _ => None,
             })
             .collect();
@@ -192,12 +348,12 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ImportEvent::Failed { file, .. } if file == "roto.mp3"))
+                .any(|e| matches!(e, TransferEvent::Failed { file, .. } if file == "roto.mp3"))
         );
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ImportEvent::Progress(p) if *p >= 1.0))
+                .any(|e| matches!(e, TransferEvent::Progress(p) if *p >= 1.0))
         );
 
         let entry = card.read(Slot::new(1).unwrap()).unwrap();
@@ -222,9 +378,9 @@ mod tests {
             egui::Context::default(),
         ));
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, ImportEvent::Failed { error, .. } if error.contains("llena")))
+            events.iter().any(
+                |e| matches!(e, TransferEvent::Failed { error, .. } if error.contains("llena"))
+            )
         );
     }
 }

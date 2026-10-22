@@ -6,13 +6,14 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use eframe::egui;
-use jamman_audio::SUPPORTED_EXTENSIONS;
 use jamman_core::device::Slot;
 
-use crate::jobs::{self, ImportEvent, WaveformResult};
+use crate::browser::{self, LocalBrowser};
+use crate::jobs::{self, TransferEvent, WaveformResult};
 use crate::player::Player;
+use crate::selection::ClickMods;
 use crate::state::Library;
-use crate::{detect, fmt, theme, ui};
+use crate::{detect, theme, ui};
 
 /// Tramos de la forma de onda. 400 bastan para dibujarla y, en una tarjeta
 /// SD lenta, se leen en unos 2 s la primera vez (luego se usa la caché).
@@ -38,9 +39,20 @@ pub struct Status {
     pub kind: StatusKind,
 }
 
-/// Importación en curso.
-pub struct ImportState {
-    rx: Receiver<ImportEvent>,
+/// Sentido de una transferencia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferKind {
+    /// Del equipo a la tarjeta.
+    Import,
+    /// De la tarjeta al equipo.
+    Export,
+}
+
+/// Transferencia en curso.
+pub struct TransferState {
+    rx: Receiver<TransferEvent>,
+    /// Sentido.
+    pub kind: TransferKind,
     /// Fichero actual.
     pub file: String,
     /// Índice del fichero actual (desde 0).
@@ -49,15 +61,38 @@ pub struct ImportState {
     pub total: usize,
     /// Progreso del fichero actual (0 a 1).
     pub progress: f32,
-    imported: usize,
+    done: usize,
     last_imported: Option<Slot>,
+    exported: Vec<PathBuf>,
     failures: Vec<(String, String)>,
+}
+
+/// Informe de errores de la última transferencia.
+pub struct TransferReport {
+    /// Título del diálogo.
+    pub title: String,
+    /// `(fichero, motivo)` de cada error.
+    pub failures: Vec<(String, String)>,
+}
+
+/// Cambio de selección pendiente mientras se decide qué hacer con los cambios
+/// sin guardar del bucle que se está editando.
+#[derive(Debug, Clone, Copy)]
+pub enum PendingSelect {
+    /// Seleccionar solo este bucle (o ninguno).
+    Single(Option<Slot>),
+    /// Aplicar un clic con modificadores.
+    Click(Slot, ClickMods),
 }
 
 /// Estado completo de la aplicación.
 pub struct JamApp {
     /// Biblioteca (tarjeta abierta y vista).
     pub lib: Library,
+    /// Explorador de ficheros del equipo.
+    pub browser: LocalBrowser,
+    /// Mostrar el explorador.
+    pub show_browser: bool,
     /// Reproductor.
     pub player: Player,
     /// Tarjetas detectadas.
@@ -66,14 +101,14 @@ pub struct JamApp {
     pub normalize: bool,
     /// Último mensaje.
     pub status: Option<Status>,
-    /// Importación en curso.
-    pub import: Option<ImportState>,
-    /// Errores de la última importación, para mostrarlos.
-    pub import_report: Option<Vec<(String, String)>>,
-    /// Bucle pendiente de confirmar su borrado.
-    pub confirm_delete: Option<Slot>,
-    /// Selección pendiente mientras se decide qué hacer con cambios sin guardar.
-    pub pending_select: Option<Option<Slot>>,
+    /// Transferencia en curso.
+    pub transfer: Option<TransferState>,
+    /// Errores de la última transferencia, para mostrarlos.
+    pub transfer_report: Option<TransferReport>,
+    /// Bucles pendientes de confirmar su borrado.
+    pub confirm_delete: Option<Vec<Slot>>,
+    /// Selección pendiente por cambios sin guardar.
+    pub pending_select: Option<PendingSelect>,
     /// Posición de destino del control "mover a".
     pub move_target: (Option<Slot>, u8),
     /// Espacio libre y total de la tarjeta.
@@ -93,12 +128,14 @@ impl JamApp {
         }
         let mut app = Self {
             lib: Library::default(),
+            browser: LocalBrowser::new(browser::default_start()),
+            show_browser: true,
             player: Player::default(),
             detected: detect::find_cards(),
             normalize: false,
             status: None,
-            import: None,
-            import_report: None,
+            transfer: None,
+            transfer_report: None,
             confirm_delete: None,
             pending_select: None,
             move_target: (None, 1),
@@ -115,13 +152,13 @@ impl JamApp {
             let path = only.clone();
             app.open_card(&path);
         }
-        if let Some(slot) = app
-            .devshot
-            .as_ref()
-            .and_then(|d| d.select_slot)
-            .and_then(|n| Slot::new(n).ok())
-        {
-            app.lib.select(Some(slot));
+        if let Some(shot) = &app.devshot {
+            if let Some(dir) = shot.browser_dir.clone() {
+                app.browser.navigate(dir);
+            }
+            if let Some(slot) = shot.select_slot.and_then(|n| Slot::new(n).ok()) {
+                app.lib.select(Some(slot));
+            }
         }
         app
     }
@@ -197,15 +234,36 @@ impl JamApp {
             .and_then(|m| Some((fs4::available_space(m).ok()?, fs4::total_space(m).ok()?)));
     }
 
-    /// Selecciona un bucle, preguntando antes si hay cambios sin guardar.
+    /// Selecciona solo un bucle, preguntando antes si hay cambios sin guardar.
     pub fn request_select(&mut self, slot: Option<Slot>) {
-        if slot == self.lib.selected() {
+        if slot == self.lib.selected() && self.lib.selection().len() <= 1 {
             return;
         }
-        if self.lib.has_unsaved_changes() {
-            self.pending_select = Some(slot);
+        if self.lib.has_unsaved_changes() && slot != self.lib.selected() {
+            self.pending_select = Some(PendingSelect::Single(slot));
         } else {
             self.lib.select(slot);
+        }
+    }
+
+    /// Clic en una fila con modificadores. Pregunta antes si el clic cambia
+    /// el bucle que se está editando y hay cambios sin guardar.
+    pub fn request_click(&mut self, slot: Slot, mods: ClickMods) {
+        let order: Vec<Slot> = self.lib.visible().iter().map(|r| r.slot).collect();
+        let mut preview = self.lib.selection().clone();
+        preview.click(slot, mods, &order);
+        if self.lib.has_unsaved_changes() && preview.primary().copied() != self.lib.selected() {
+            self.pending_select = Some(PendingSelect::Click(slot, mods));
+        } else {
+            self.lib.click(slot, mods);
+        }
+    }
+
+    /// Aplica un cambio de selección pendiente.
+    pub fn apply_pending(&mut self, pending: PendingSelect) {
+        match pending {
+            PendingSelect::Single(slot) => self.lib.select(slot),
+            PendingSelect::Click(slot, mods) => self.lib.click(slot, mods),
         }
     }
 
@@ -217,15 +275,26 @@ impl JamApp {
         }
     }
 
+    /// `true` si se puede empezar una transferencia.
+    pub fn can_transfer(&self) -> bool {
+        self.lib.card().is_some() && self.transfer.is_none()
+    }
+
     /// Pide ficheros de audio y los importa.
     pub fn pick_and_import(&mut self, ctx: &egui::Context) {
         if let Some(files) = rfd::FileDialog::new()
             .set_title("Añadir canciones a la tarjeta")
-            .add_filter("Audio", &SUPPORTED_EXTENSIONS)
+            .add_filter("Audio", &jamman_audio::SUPPORTED_EXTENSIONS)
             .pick_files()
         {
             self.start_import(files, ctx);
         }
+    }
+
+    /// Importa lo seleccionado en el explorador.
+    pub fn import_from_browser(&mut self, ctx: &egui::Context) {
+        let paths = self.browser.selected_paths();
+        self.start_import(paths, ctx);
     }
 
     /// Importa ficheros (o el audio de las carpetas indicadas).
@@ -234,8 +303,8 @@ impl JamApp {
             self.error("Abre primero una tarjeta.");
             return;
         };
-        if self.import.is_some() {
-            self.error("Espera a que termine la importación en curso.");
+        if self.transfer.is_some() {
+            self.error("Espera a que termine la transferencia en curso.");
             return;
         }
         let files = audio_files(paths);
@@ -244,64 +313,115 @@ impl JamApp {
             return;
         }
         self.player.stop();
-        self.import = Some(ImportState {
-            total: files.len(),
-            rx: jobs::spawn_import(card, files, self.normalize, ctx.clone()),
-            file: String::new(),
-            index: 0,
-            progress: 0.0,
-            imported: 0,
-            last_imported: None,
-            failures: Vec::new(),
-        });
+        let rx = jobs::spawn_import(card, files.clone(), self.normalize, ctx.clone());
+        self.transfer = Some(TransferState::new(rx, TransferKind::Import, files.len()));
     }
 
-    fn poll_import(&mut self) {
-        let Some(state) = &mut self.import else {
+    /// Exporta los bucles seleccionados a la carpeta del explorador.
+    pub fn export_selection(&mut self, ctx: &egui::Context) {
+        let slots = self.lib.selected_slots();
+        self.export_to_browser(slots, ctx);
+    }
+
+    /// Exporta bucles a la carpeta abierta en el explorador.
+    pub fn export_to_browser(&mut self, slots: Vec<Slot>, ctx: &egui::Context) {
+        let Some(card) = self.lib.card().cloned() else {
             return;
         };
-        let mut changed = false;
-        let mut done = false;
+        if self.transfer.is_some() {
+            self.error("Espera a que termine la transferencia en curso.");
+            return;
+        }
+        let loops: Vec<(Slot, String)> = slots
+            .into_iter()
+            .filter_map(|s| self.lib.row(s).map(|r| (s, r.name().to_owned())))
+            .collect();
+        if loops.is_empty() {
+            return;
+        }
+        let dir = self.browser.dir().to_path_buf();
+        let total = loops.len();
+        let rx = jobs::spawn_export(card, loops, dir, ctx.clone());
+        self.transfer = Some(TransferState::new(rx, TransferKind::Export, total));
+    }
+
+    fn poll_transfer(&mut self) {
+        let Some(state) = &mut self.transfer else {
+            return;
+        };
+        let mut card_changed = false;
+        let mut finished = false;
         loop {
             match state.rx.try_recv() {
-                Ok(ImportEvent::Started { index, total, file }) => {
+                Ok(TransferEvent::Started { index, total, file }) => {
                     state.index = index;
                     state.total = total;
                     state.file = file;
                     state.progress = 0.0;
                 }
-                Ok(ImportEvent::Progress(p)) => state.progress = p,
-                Ok(ImportEvent::Imported(slot)) => {
-                    state.imported += 1;
+                Ok(TransferEvent::Progress(p)) => state.progress = p,
+                Ok(TransferEvent::Imported(slot)) => {
+                    state.done += 1;
                     state.last_imported = Some(slot);
-                    changed = true;
+                    card_changed = true;
                 }
-                Ok(ImportEvent::Failed { file, error }) => state.failures.push((file, error)),
-                Ok(ImportEvent::Done) | Err(TryRecvError::Disconnected) => {
-                    done = true;
+                Ok(TransferEvent::Exported(path)) => {
+                    state.done += 1;
+                    state.exported.push(path);
+                }
+                Ok(TransferEvent::Failed { file, error }) => state.failures.push((file, error)),
+                Ok(TransferEvent::Done) | Err(TryRecvError::Disconnected) => {
+                    finished = true;
                     break;
                 }
                 Err(TryRecvError::Empty) => break,
             }
         }
-        if changed {
+        if card_changed {
             self.reload();
         }
-        if done && let Some(state) = self.import.take() {
-            let msg = format!(
-                "Importación terminada: {} añadidas, {} con error. {EJECT_HINT}",
-                state.imported,
-                state.failures.len()
-            );
-            if !self.lib.has_unsaved_changes() && state.last_imported.is_some() {
-                self.lib.select(state.last_imported);
+        if finished && let Some(state) = self.transfer.take() {
+            self.finish_transfer(state);
+        }
+    }
+
+    fn finish_transfer(&mut self, state: TransferState) {
+        let errors = state.failures.len();
+        let (msg, title) = match state.kind {
+            TransferKind::Import => {
+                if !self.lib.has_unsaved_changes() && state.last_imported.is_some() {
+                    self.lib.select(state.last_imported);
+                }
+                (
+                    format!(
+                        "Importación terminada: {} añadidas, {errors} con error. {EJECT_HINT}",
+                        state.done
+                    ),
+                    "Algunas canciones no se pudieron añadir",
+                )
             }
-            if state.failures.is_empty() {
-                self.info(msg);
-            } else {
-                self.error(msg);
-                self.import_report = Some(state.failures);
+            TransferKind::Export => {
+                // Como en un cliente SFTP: se ven seleccionados los ficheros nuevos.
+                self.browser.refresh();
+                self.browser.selection.select_all(&state.exported);
+                (
+                    format!(
+                        "Exportación terminada: {} copiadas a {}, {errors} con error.",
+                        state.done,
+                        self.browser.dir().display()
+                    ),
+                    "Algunos bucles no se pudieron exportar",
+                )
             }
+        };
+        if errors == 0 {
+            self.info(msg);
+        } else {
+            self.error(msg);
+            self.transfer_report = Some(TransferReport {
+                title: title.to_owned(),
+                failures: state.failures,
+            });
         }
     }
 
@@ -368,55 +488,38 @@ impl JamApp {
         }
     }
 
-    /// Borra un bucle (tras confirmación de la interfaz).
-    pub fn delete(&mut self, slot: Slot) {
-        if self.player.current() == Some(slot) {
-            self.player.stop();
-        }
-        let Some(card) = self.lib.card() else {
-            return;
-        };
-        match card.remove(slot) {
-            Ok(()) => {
-                self.reload();
-                self.info(format!("Bucle {:02} borrado. {EJECT_HINT}", slot.get()));
-            }
-            Err(e) => self.error(format!("No se pudo borrar: {e}")),
+    /// Pide confirmación para borrar los bucles seleccionados.
+    pub fn ask_delete_selection(&mut self) {
+        let slots = self.lib.selected_slots();
+        if !slots.is_empty() {
+            self.confirm_delete = Some(slots);
         }
     }
 
-    /// Exporta el audio de un bucle a un WAV elegido por el usuario.
-    pub fn export(&mut self, slot: Slot) {
+    /// Borra bucles (tras confirmación de la interfaz).
+    pub fn delete(&mut self, slots: &[Slot]) {
+        if self.player.current().is_some_and(|s| slots.contains(&s)) {
+            self.player.stop();
+        }
         let Some(card) = self.lib.card().cloned() else {
             return;
         };
-        let name = self
-            .lib
-            .row(slot)
-            .map(|r| r.name().to_owned())
-            .unwrap_or_default();
-        let Some(dest) = rfd::FileDialog::new()
-            .set_title("Exportar audio del bucle")
-            .set_file_name(format!("{:02} {name}.wav", slot.get()))
-            .add_filter("WAV", &["wav"])
-            .save_file()
-        else {
-            return;
-        };
-        // El diálogo ya pidió confirmación si el fichero existía.
-        if dest.exists()
-            && let Err(e) = std::fs::remove_file(&dest)
-        {
-            self.error(format!("No se puede sobrescribir {}: {e}", dest.display()));
-            return;
-        }
-        match card.export_wav(slot, &dest) {
-            Ok(bytes) => self.info(format!(
-                "Exportado {} ({})",
-                dest.display(),
-                fmt::bytes(bytes)
-            )),
-            Err(e) => self.error(format!("No se pudo exportar: {e}")),
+        let errors: Vec<String> = slots
+            .iter()
+            .filter_map(|s| {
+                card.remove(*s)
+                    .err()
+                    .map(|e| format!("{:02}: {e}", s.get()))
+            })
+            .collect();
+        self.reload();
+        if errors.is_empty() {
+            self.info(match slots {
+                [one] => format!("Bucle {:02} borrado. {EJECT_HINT}", one.get()),
+                many => format!("{} bucles borrados. {EJECT_HINT}", many.len()),
+            });
+        } else {
+            self.error(format!("No se pudo borrar: {}", errors.join("; ")));
         }
     }
 
@@ -455,13 +558,25 @@ impl JamApp {
     }
 }
 
+impl TransferState {
+    fn new(rx: Receiver<TransferEvent>, kind: TransferKind, total: usize) -> Self {
+        Self {
+            rx,
+            kind,
+            file: String::new(),
+            index: 0,
+            total,
+            progress: 0.0,
+            done: 0,
+            last_imported: None,
+            exported: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
+}
+
 /// Expande carpetas (un nivel) y se queda con las extensiones admitidas.
 fn audio_files(paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    let is_audio = |p: &Path| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| SUPPORTED_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-    };
     let mut files = Vec::new();
     for p in paths {
         if p.is_dir() {
@@ -469,11 +584,11 @@ fn audio_files(paths: Vec<PathBuf>) -> Vec<PathBuf> {
                 .into_iter()
                 .flatten()
                 .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|f| f.is_file() && is_audio(f))
+                .filter(|f| f.is_file() && browser::is_audio(f))
                 .collect();
             inside.sort();
             files.extend(inside);
-        } else if is_audio(&p) {
+        } else if browser::is_audio(&p) {
             files.push(p);
         }
     }
@@ -482,7 +597,7 @@ fn audio_files(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 
 impl eframe::App for JamApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_import();
+        self.poll_transfer();
         self.poll_waveforms();
         if self.player.is_playing() {
             ctx.request_repaint_after(Duration::from_millis(50));

@@ -130,6 +130,15 @@ impl LocalBrowser {
         }
     }
 
+    /// Carpeta actual para mostrar, con la carpeta personal abreviada como `~`.
+    pub fn display_dir(&self) -> String {
+        match home().and_then(|h| self.dir.strip_prefix(&h).ok().map(Path::to_path_buf)) {
+            Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+            Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+            None => self.dir.display().to_string(),
+        }
+    }
+
     /// Elementos seleccionados, en el orden en que se muestran.
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         self.entries
@@ -152,7 +161,7 @@ fn read_entries(dir: &Path) -> std::io::Result<Vec<LocalEntry>> {
             // `metadata` sigue los enlaces simbólicos.
             let meta = std::fs::metadata(&path).ok()?;
             let is_dir = meta.is_dir();
-            (is_dir || is_audio(&path)).then(|| LocalEntry {
+            (is_dir || is_audio(&path)).then_some(LocalEntry {
                 path,
                 name,
                 is_dir,

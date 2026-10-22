@@ -11,7 +11,7 @@ use crate::{fmt, theme};
 
 /// Acción pedida desde una fila.
 enum RowAction {
-    Select(Slot),
+    Click(Slot),
     Play(Slot),
     Export(Slot),
     Delete(Slot),
@@ -26,7 +26,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     if rows.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.weak(if app.lib.rows().is_empty() {
-                "La tarjeta está vacía. Añade canciones con «＋ Añadir canciones…» o arrastrándolas aquí."
+                "La tarjeta está vacía. Añade canciones desde el explorador, con «＋ Añadir canciones…» o arrastrándolas aquí."
             } else {
                 "Ningún bucle coincide con la búsqueda."
             });
@@ -34,7 +34,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         return;
     }
 
-    let selected = app.lib.selected();
+    let selection = app.lib.selection().clone();
     let playing = app.player.current().filter(|_| app.player.is_playing());
     let (sort, desc) = (app.lib.sort, app.lib.sort_desc);
     let mut action = None;
@@ -64,23 +64,31 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         }
     };
 
-    // Ancho del nombre: lo que dejan libre las demás columnas y sus separaciones.
-    const FIXED: [f32; 7] = [44.0, 66.0, 48.0, 86.0, 44.0, 56.0, 84.0];
-    let spacing = ui.spacing().item_spacing.x * FIXED.len() as f32;
-    let name_width = (ui.available_width() - FIXED.iter().sum::<f32>() - spacing - 16.0).max(160.0);
+    // Ancho del nombre: lo que dejan libre las demás columnas y sus
+    // separaciones. Si no cabe todo, la valoración se oculta (sigue en el
+    // panel de ajustes).
+    const FIXED: [f32; 6] = [44.0, 64.0, 46.0, 82.0, 44.0, 56.0];
+    const RATING: f32 = 80.0;
+    const MIN_NAME: f32 = 150.0;
+    let spacing = ui.spacing().item_spacing.x;
+    let fixed: f32 = FIXED.iter().sum::<f32>() + spacing * FIXED.len() as f32 + 16.0;
+    let show_rating = ui.available_width() - fixed - RATING - spacing >= MIN_NAME;
+    let extra = if show_rating { RATING + spacing } else { 0.0 };
+    let name_width = (ui.available_width() - fixed - extra).max(MIN_NAME);
 
-    TableBuilder::new(ui)
+    let mut table = TableBuilder::new(ui)
         .striped(true)
         .sense(Sense::click())
         .cell_layout(Layout::left_to_right(Align::Center))
         .column(Column::exact(FIXED[0]))
-        .column(Column::exact(name_width).clip(true))
-        .column(Column::exact(FIXED[1]))
-        .column(Column::exact(FIXED[2]))
-        .column(Column::exact(FIXED[3]))
-        .column(Column::exact(FIXED[4]))
-        .column(Column::exact(FIXED[5]))
-        .column(Column::exact(FIXED[6]))
+        .column(Column::exact(name_width).clip(true));
+    for w in &FIXED[1..] {
+        table = table.column(Column::exact(*w));
+    }
+    if show_rating {
+        table = table.column(Column::exact(RATING));
+    }
+    table
         .header(30.0, |mut h| {
             h.col(|ui| header_cell(ui, "Nº", Some(SortKey::Slot)));
             h.col(|ui| header_cell(ui, "Nombre", Some(SortKey::Name)));
@@ -89,13 +97,16 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
             h.col(|ui| header_cell(ui, "Modo", None));
             h.col(|ui| header_cell(ui, "Ritmo", None));
             h.col(|ui| header_cell(ui, "Parada", None));
-            h.col(|ui| header_cell(ui, "Valoración", None));
+            if show_rating {
+                h.col(|ui| header_cell(ui, "Valoración", None));
+            }
         })
         .body(|body| {
             body.rows(30.0, rows.len(), |mut row| {
                 let r = &rows[row.index()];
                 let slot = r.slot;
-                row.set_selected(selected == Some(slot));
+                let in_selection = selection.contains(&slot);
+                row.set_selected(in_selection);
 
                 row.col(|ui| {
                     if playing == Some(slot) {
@@ -142,11 +153,13 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
                             }),
                         );
                     });
-                    row.col(|ui| {
-                        ui.label(RichText::new(stars(s.rating)).color(theme::ACCENT));
-                    });
+                    if show_rating {
+                        row.col(|ui| {
+                            ui.label(RichText::new(stars(s.rating)).color(theme::ACCENT));
+                        });
+                    }
                 } else {
-                    for _ in 0..5 {
+                    for _ in 0..(4 + usize::from(show_rating)) {
                         row.col(|_| {});
                     }
                 }
@@ -155,18 +168,32 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
                 if response.double_clicked() {
                     action = Some(RowAction::Play(slot));
                 } else if response.clicked() {
-                    action = Some(RowAction::Select(slot));
+                    action = Some(RowAction::Click(slot));
                 }
+                // El menú actúa sobre la selección si la fila está en ella.
+                let many = in_selection && selection.len() > 1;
                 response.context_menu(|ui| {
                     if ui.button("▶ Reproducir").clicked() {
                         action = Some(RowAction::Play(slot));
                     }
-                    if ui.button("⬇ Exportar WAV…").clicked() {
+                    let export = if many {
+                        format!("⬅ Exportar {} a la carpeta del explorador", selection.len())
+                    } else {
+                        "⬅ Exportar a la carpeta del explorador".to_owned()
+                    };
+                    if ui.button(export).clicked() {
                         action = Some(RowAction::Export(slot));
                     }
                     ui.separator();
                     if ui
-                        .button(RichText::new("🗑 Borrar…").color(theme::DANGER))
+                        .button(
+                            RichText::new(if many {
+                                format!("🗑 Borrar {}…", selection.len())
+                            } else {
+                                "🗑 Borrar…".to_owned()
+                            })
+                            .color(theme::DANGER),
+                        )
                         .clicked()
                     {
                         action = Some(RowAction::Delete(slot));
@@ -179,17 +206,26 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         app.lib.sort_by(key);
     }
     match action {
-        Some(RowAction::Select(slot)) => app.request_select(Some(slot)),
+        Some(RowAction::Click(slot)) => app.request_click(slot, super::click_mods(ui)),
         Some(RowAction::Play(slot)) => {
             app.request_select(Some(slot));
             if app.lib.selected() == Some(slot) {
                 app.play(slot, 0.0);
             }
         }
-        Some(RowAction::Export(slot)) => app.export(slot),
+        Some(RowAction::Export(slot)) => {
+            if selection.contains(&slot) {
+                app.export_selection(ui.ctx());
+            } else {
+                app.export_to_browser(vec![slot], ui.ctx());
+            }
+        }
         Some(RowAction::Delete(slot)) => {
-            app.request_select(Some(slot));
-            app.confirm_delete = Some(slot);
+            if selection.contains(&slot) {
+                app.ask_delete_selection();
+            } else {
+                app.confirm_delete = Some(vec![slot]);
+            }
         }
         None => {}
     }

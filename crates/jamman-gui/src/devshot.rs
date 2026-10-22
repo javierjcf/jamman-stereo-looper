@@ -2,8 +2,9 @@
 //!
 //! Si la variable `JAMMAN_SCREENSHOT` contiene una ruta, tras unos fotogramas
 //! la app guarda su ventana como imagen PPM y se cierra. Con
-//! `JAMMAN_SCREENSHOT_SLOT=N` selecciona antes el bucle `N` y con
-//! `JAMMAN_SCREENSHOT_THEME=light|dark` fuerza el tema. Sirve para
+//! `JAMMAN_SCREENSHOT_SLOT=N` selecciona antes el bucle `N`, con
+//! `JAMMAN_SCREENSHOT_THEME=light|dark` fuerza el tema y con
+//! `JAMMAN_SCREENSHOT_BROWSER=carpeta` abre esa carpeta en el explorador. Sirve para
 //! revisar el diseño y generar las capturas del README:
 //!
 //! ```text
@@ -27,6 +28,8 @@ pub struct DevShot {
     path: PathBuf,
     /// Bucle que se selecciona antes de capturar.
     pub select_slot: Option<u8>,
+    /// Carpeta que se abre en el explorador.
+    pub browser_dir: Option<PathBuf>,
     started: Instant,
     requested: bool,
     done: Arc<AtomicBool>,
@@ -41,6 +44,7 @@ impl DevShot {
             select_slot: std::env::var("JAMMAN_SCREENSHOT_SLOT")
                 .ok()
                 .and_then(|s| s.parse().ok()),
+            browser_dir: std::env::var_os("JAMMAN_SCREENSHOT_BROWSER").map(PathBuf::from),
             started: Instant::now(),
             requested: false,
             done: Arc::new(AtomicBool::new(false)),

@@ -136,6 +136,20 @@ pub enum Response {
 }
 
 impl Response {
+    /// Identificador de tipo del mensaje del que procede esta respuesta.
+    pub fn message_type(&self) -> u16 {
+        match self {
+            Self::Success => message_type::SUCCESS,
+            Self::Failure { .. } => message_type::FAILURE,
+            Self::WhoAmI(_) => message_type::WHO_AM_I,
+            Self::EntryInfo(_) => message_type::ENTRY_INFO,
+            Self::FolderContents { .. } => message_type::FOLDER_CONTENTS,
+            Self::FileOpen { .. } => message_type::FILE_OPEN,
+            Self::FileRead { .. } => message_type::FILE_READ,
+            Self::Unparsed { message_type, .. } => *message_type,
+        }
+    }
+
     /// Interpreta la carga de un mensaje cuya cabecera ya se ha leído.
     pub fn parse(header: &Header, payload: &[u8]) -> Result<Self> {
         let mut r = Reader::new(payload);
@@ -326,6 +340,18 @@ mod tests {
                 payload: vec![1, 2, 3]
             }
         );
+    }
+
+    #[test]
+    fn message_type_matches_the_parsed_id() {
+        for id in [2u16, 3, 0x0b, 0x14] {
+            let mut w = Writer::new();
+            w.string("x");
+            let payload = if id == 3 { w.into_vec() } else { vec![0; 16] };
+            if let Ok(r) = Response::parse(&header(id), &payload) {
+                assert_eq!(r.message_type(), id);
+            }
+        }
     }
 
     #[test]

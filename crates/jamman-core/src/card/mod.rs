@@ -274,6 +274,19 @@ impl Card {
     /// `PatchNN`, de modo que un fallo (por ejemplo, tarjeta llena) no deja un
     /// bucle a medias.
     pub fn import_wav(&self, slot: Slot, source: &Path, name: &str) -> Result<Entry> {
+        self.import_wav_from(slot, source, name, source)
+    }
+
+    /// Como [`Card::import_wav`], pero la descripción menciona `original`: el
+    /// fichero que eligió el usuario antes de convertirlo a `wav`.
+    pub fn import_wav_from(
+        &self,
+        slot: Slot,
+        wav: &Path,
+        name: &str,
+        original: &Path,
+    ) -> Result<Entry> {
+        let source = wav;
         let final_dir = self.patch_dir(slot);
         if final_dir.exists() {
             return Err(Error::SlotOccupied(slot.get()));
@@ -283,7 +296,7 @@ impl Card {
         wav::read_info(&mut input)?.check_pedal_format()?;
 
         let id = uuid::Uuid::new_v4().to_string();
-        let file_name = source
+        let file_name = original
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -512,6 +525,21 @@ mod tests {
         assert_eq!(fs::read(base.join("PhraseA/phrase.wav")).unwrap(), audio);
         assert!(base.join("patch.xml").is_file());
         assert!(base.join("PhraseA/phrase.xml").is_file());
+    }
+
+    #[test]
+    fn import_from_a_converted_file_describes_the_original() {
+        let (dir, card) = new_card();
+        let converted = write_source(&dir, "tmp123.wav", &pedal_wav(4));
+        let e = card
+            .import_wav_from(
+                slot(1),
+                &converted,
+                "Canción",
+                Path::new("/música/Canción.mp3"),
+            )
+            .unwrap();
+        assert_eq!(e.patch.description, "Imported from Canción.mp3");
     }
 
     #[test]

@@ -133,6 +133,49 @@ jamman get <ruta> <destino>
 En Linux el pedal aparece como `/dev/ttyACM*`; tu usuario necesita permiso sobre
 ese dispositivo (grupo `uucp` en Arch, `dialout` en Debian/Ubuntu).
 
+## Qué falta
+
+Revisado contra el código y contra el análisis del programa original
+(JamManager XT). Tres niveles: lo **imprescindible** para fiarse de la carga de
+canciones, lo **importante** para el buen funcionamiento y la paridad con el
+original, y lo **opcional**.
+
+> Las filas marcadas con 🔍 dependen de un análisis del original que está en
+> curso; se actualizarán con lo que se encuentre.
+
+### 🔴 Imprescindible (que cargar en la SD sea fiable)
+
+| # | Qué falta | Por qué importa |
+|---|---|---|
+| 1 | **Comprobar en el pedal un bucle escrito por la app.** | Todo el formato se ha contrastado con bucles escritos por el software original, pero no consta que el pedal haya cargado uno generado por esta app. Prueba mínima: meter la tarjeta en el pedal y comprobar que el bucle aparece en su posición, suena a su velocidad y respeta tempo, compás, parada y ritmo. |
+| 2 | **Escritura segura en FAT.** Solo el audio se sincroniza (`sync_all`); `patch.xml`, `phrase.xml` y el renombrado de la carpeta no. La GUI solo *recuerda* expulsar la tarjeta. | Si se saca la tarjeta justo después de importar, puede quedar un bucle sin XML o sin carpeta. Hace falta sincronizar ficheros y carpeta al terminar, y un botón de **expulsión segura** (Linux: `udisks`; Windows: expulsar volumen). |
+| 3 | **Comprobar el espacio antes de copiar** y **limpiar restos** `.tmp-PatchNN`. | Hoy la tarjeta llena se detecta al fallar la copia (no queda nada a medias, pero se pierde tiempo copiando decenas de MB). El original avisa antes («not enough space on external storage…»). Un corte de corriente deja carpetas temporales que no se limpian al abrir la tarjeta. |
+| 4 | 🔍 **Tarjetas nuevas o recién formateadas.** | La GUI solo detecta tarjetas que ya tienen la carpeta `JamManStereo`; con una tarjeta vacía hay que usar `jamman card init` (no existe en la GUI). Falta saber qué hace el original si la carpeta no existe y si el pedal crea algo más al formatear. Además la tarjeta debe ser FAT32/SDHC (hasta 32 GB); exFAT no la lee el pedal: conviene avisarlo. |
+| 5 | 🔍 **`SettingsVersion` y `AudioVersion`.** | Al editar un bucle o cambiar su audio la app no toca estos contadores. El original los usa para saber si un bucle cambió; no se sabe si el pedal depende de ellos. |
+| 6 | **Windows: compilación y pruebas.** No hay integración continua y no consta que la GUI se haya compilado y probado en Windows (detección de unidades `A:`–`Z:`, rutas, audio). | Es un objetivo del proyecto. Falta un flujo de GitHub Actions para Linux y Windows y una prueba manual con una tarjeta real. |
+
+### 🟡 Importante (buen funcionamiento y paridad con el original)
+
+| Qué falta | Notas |
+|---|---|
+| **Multiplicar un bucle** (repetirlo *n* veces) | El original lo hace sobre el bucle ya cargado, avisa si no hay espacio y rechaza lo que pase de 10 minutos. |
+| **Atenuar 3 dB / 6 dB y normalizar** un bucle ya en la tarjeta | Hoy solo se normaliza al importar. |
+| **Aviso al quedarse sin posiciones libres** al importar varios ficheros | El original avisa de que «solo se copiarán los bucles que no pasen del último hueco». Comprobar cómo se comporta la GUI. |
+| **Nombres duplicados** | El original renombra el duplicado. En la tarjeta el pedal solo muestra el número, pero la búsqueda de la GUI sí se resiente. |
+| **Tarjeta bloqueada** (interruptor de solo lectura) y tarjeta retirada en caliente | Mostrar un mensaje claro en lugar de un error de E/S. |
+| **Deshacer y rehacer** | El original lo tiene en su biblioteca y en las opciones de cada bucle (clases `QUndoCommand`). |
+| 🔍 **Tempo y compás por defecto de un bucle importado** | Hoy se escribe 120 BPM y 4 tiempos. Falta ver si el original hace algo más y si el pedal sincroniza mejor con otro valor. |
+
+### 🟢 Opcional
+
+| Qué falta | Notas |
+|---|---|
+| **Pedal por USB** (memoria interna, leer y escribir bucles) | El protocolo está implementado pero **sin validar con el pedal**. No hace falta para trabajar con la tarjeta; solo para la memoria interna. Pendientes: raíz del sistema de ficheros, modo de apertura para escribir, mensajes asíncronos y propiedades (ver [docs/03-protocolo.md](docs/03-protocolo.md)). |
+| **Biblioteca local** (JamLists, valoración y búsqueda persistentes) y diálogo de **sincronización** con la tarjeta | El original guarda una base SQLite. El explorador del equipo cubre lo básico. |
+| **Detección automática de tempo** | El pedal mide el tempo al grabar (`BpmValidated` en `phrase.xml`). Si el original hace algo parecido al importar está por confirmar (🔍). |
+| **Idioma y preferencias**, **instaladores** (AppImage, `.deb`, `.msi`) | |
+| **Actualización de firmware** | Descartada a propósito: un fallo puede inutilizar el pedal. |
+
 ## Desarrollo
 
 ```bash

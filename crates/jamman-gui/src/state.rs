@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use jamman_core::Result;
+
+use crate::selection::{ClickMods, Selection};
 use jamman_core::card::{Card, Entry, LoopSettings};
 use jamman_core::device::Slot;
 
@@ -98,7 +100,7 @@ pub struct Library {
     card: Option<Card>,
     mount: Option<PathBuf>,
     rows: Vec<Row>,
-    selected: Option<Slot>,
+    selection: Selection<Slot>,
     /// Texto de búsqueda.
     pub filter: String,
     /// Columna de orden.
@@ -115,7 +117,7 @@ impl Library {
         let card = Card::open(path)?;
         self.mount = Some(path.to_path_buf());
         self.card = Some(card);
-        self.selected = None;
+        self.selection.clear();
         self.draft = None;
         self.reload()
     }
@@ -130,7 +132,8 @@ impl Library {
         self.mount.as_deref()
     }
 
-    /// Vuelve a leer la tarjeta. Conserva la selección si el bucle sigue ahí.
+    /// Vuelve a leer la tarjeta. Conserva la selección de los bucles que sigan
+    /// ahí y los cambios sin guardar del bucle principal.
     pub fn reload(&mut self) -> Result<()> {
         let Some(card) = &self.card else {
             self.rows.clear();
@@ -150,8 +153,13 @@ impl Library {
                 },
             })
             .collect();
-        let keep = self.selected.filter(|s| self.row(*s).is_some());
-        self.select(keep);
+        let existing: Vec<Slot> = self.rows.iter().map(|r| r.slot).collect();
+        self.selection.retain(|s| existing.contains(s));
+        let keep_edits =
+            self.has_unsaved_changes() && self.draft.as_ref().map(|d| d.slot) == self.selected();
+        if !keep_edits {
+            self.rebuild_draft();
+        }
         Ok(())
     }
 
@@ -195,17 +203,54 @@ impl Library {
         }
     }
 
-    /// Bucle seleccionado.
+    /// Bucle principal de la selección: el que se edita y se reproduce.
     pub fn selected(&self) -> Option<Slot> {
-        self.selected
+        self.selection.primary().copied()
     }
 
-    /// Selecciona un bucle (o ninguno) y prepara sus ajustes para editar.
+    /// Selección completa.
+    pub fn selection(&self) -> &Selection<Slot> {
+        &self.selection
+    }
+
+    /// Posiciones seleccionadas, en orden ascendente.
+    pub fn selected_slots(&self) -> Vec<Slot> {
+        self.selection.items().copied().collect()
+    }
+
+    /// Selecciona solo un bucle (o ninguno) y prepara sus ajustes para editar.
     /// Los cambios sin guardar del anterior se descartan: la interfaz debe
     /// preguntar antes si [`Draft::is_dirty`].
     pub fn select(&mut self, slot: Option<Slot>) {
-        self.selected = slot;
-        self.draft = slot
+        match slot {
+            Some(s) => self.selection.set_single(s),
+            None => self.selection.clear(),
+        }
+        self.rebuild_draft();
+    }
+
+    /// Aplica un clic (con Ctrl o Mayús) sobre la tabla tal como se ve.
+    /// Si cambia el bucle principal, se preparan sus ajustes.
+    pub fn click(&mut self, slot: Slot, mods: ClickMods) {
+        let order: Vec<Slot> = self.visible().iter().map(|r| r.slot).collect();
+        self.selection.click(slot, mods, &order);
+        if self.draft.as_ref().map(|d| d.slot) != self.selected() {
+            self.rebuild_draft();
+        }
+    }
+
+    /// Selecciona todos los bucles visibles.
+    pub fn select_all_visible(&mut self) {
+        let order: Vec<Slot> = self.visible().iter().map(|r| r.slot).collect();
+        self.selection.select_all(&order);
+        if self.draft.as_ref().map(|d| d.slot) != self.selected() {
+            self.rebuild_draft();
+        }
+    }
+
+    fn rebuild_draft(&mut self) {
+        self.draft = self
+            .selected()
             .and_then(|s| self.row(s))
             .and_then(|r| r.settings.clone().map(|settings| (r.slot, settings)))
             .map(|(slot, settings)| Draft {
@@ -227,6 +272,8 @@ impl Library {
         };
         if draft.is_dirty() {
             card.update(draft.slot, &draft.edited)?;
+            // Sin borrador, la recarga lo rehace con los valores guardados.
+            self.draft = None;
             self.reload()?;
         }
         Ok(())
@@ -355,6 +402,37 @@ mod tests {
         lib.reload().unwrap();
         assert_eq!(lib.selected(), None);
         assert!(lib.draft.is_none());
+    }
+
+    #[test]
+    fn multiple_selection_keeps_editing_the_primary_loop() {
+        let (_d, mut lib) = library_with(&[(1, "a", 4), (2, "b", 4), (3, "c", 4)]);
+        let ctrl = ClickMods {
+            toggle: true,
+            range: false,
+        };
+        let shift = ClickMods {
+            toggle: false,
+            range: true,
+        };
+        lib.click(slot(1), ClickMods::default());
+        lib.click(slot(3), shift);
+        assert_eq!(lib.selected_slots(), [slot(1), slot(2), slot(3)]);
+        lib.click(slot(2), ctrl);
+        assert_eq!(lib.selected_slots(), [slot(1), slot(3)]);
+        assert_eq!(lib.draft.as_ref().unwrap().slot, lib.selected().unwrap());
+        lib.select_all_visible();
+        assert_eq!(lib.selection().len(), 3);
+    }
+
+    #[test]
+    fn reload_keeps_unsaved_edits_of_the_primary_loop() {
+        let (_d, mut lib) = library_with(&[(1, "a", 4)]);
+        lib.select(Some(slot(1)));
+        lib.draft.as_mut().unwrap().edited.name = "editando".into();
+        lib.reload().unwrap();
+        assert_eq!(lib.draft.as_ref().unwrap().edited.name, "editando");
+        assert!(lib.has_unsaved_changes());
     }
 
     #[test]

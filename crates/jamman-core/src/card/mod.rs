@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use crate::device::{SLOTS_PER_STORAGE, Slot};
 use crate::{Error, Result};
 pub use meta::{PatchMeta, PhraseMeta};
+pub use options::{RhythmType, StopMode};
 pub use wav::WavInfo;
 
 /// Nombre de la carpeta raíz del JamMan en la tarjeta.
@@ -48,6 +49,112 @@ pub struct Entry {
     pub phrase: PhraseMeta,
     /// Formato y tamaño del audio.
     pub audio: WavInfo,
+}
+
+/// Ajustes editables de un bucle.
+///
+/// Ritmo y modo de parada se guardan como el texto XML para no perder valores
+/// desconocidos; [`RhythmType`] y [`StopMode`] sirven para elegirlos.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopSettings {
+    /// Nombre.
+    pub name: String,
+    /// Ritmo (valor XML, ver [`RhythmType::xml`]).
+    pub rhythm_type: String,
+    /// Modo de parada (valor XML, ver [`StopMode::xml`]).
+    pub stop_mode: String,
+    /// Tempo en BPM.
+    pub bpm: f64,
+    /// Tiempos por compás.
+    pub beats_per_measure: u32,
+    /// `true`: bucle; `false`: una sola vez (Single).
+    pub is_loop: bool,
+    /// Reproducción invertida.
+    pub is_reversed: bool,
+    /// Descripción.
+    pub description: String,
+    /// Artista.
+    pub artist: String,
+    /// Género.
+    pub genre: String,
+    /// Valoración (0 a 5).
+    pub rating: u8,
+    /// Etiquetas.
+    pub tags: String,
+}
+
+impl LoopSettings {
+    /// Ajustes actuales de un bucle leído.
+    pub fn from_entry(e: &Entry) -> Self {
+        Self {
+            name: e.patch.name.clone(),
+            rhythm_type: e.patch.rhythm_type.clone(),
+            stop_mode: e.patch.stop_mode.clone(),
+            bpm: e.phrase.bpm,
+            beats_per_measure: e.phrase.beats_per_measure,
+            is_loop: e.phrase.is_loop,
+            is_reversed: e.phrase.is_reversed,
+            description: e.patch.description.clone(),
+            artist: e.patch.artist.clone(),
+            genre: e.patch.genre.clone(),
+            rating: e.patch.rating,
+            tags: e.patch.tags.clone(),
+        }
+    }
+
+    /// Comprueba los rangos del pedal.
+    pub fn validate(&self) -> Result<()> {
+        if !options::BPM_RANGE.contains(&self.bpm) {
+            return Err(Error::InvalidSetting(format!(
+                "tempo {} fuera de 40..=240 BPM",
+                self.bpm
+            )));
+        }
+        if !options::BEATS_PER_MEASURE_RANGE.contains(&self.beats_per_measure) {
+            return Err(Error::InvalidSetting(format!(
+                "{} tiempos por compás fuera de 2..=15",
+                self.beats_per_measure
+            )));
+        }
+        if self.rating > options::MAX_RATING {
+            return Err(Error::InvalidSetting(format!(
+                "valoración {} mayor que {}",
+                self.rating,
+                options::MAX_RATING
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Fija varias etiquetas de un documento: `(etiqueta, valor, padre)`. Una
+/// etiqueta que no existía no se crea si su valor es el que se asume cuando
+/// falta (vacío, o `0` en `Rating`), para no añadir nada innecesario a los
+/// ficheros que escribe el pedal.
+fn set_all(mut doc: String, file: &str, fields: &[(&str, String, &str)]) -> Result<String> {
+    for (tag, value, parent) in fields {
+        let default = if *tag == "Rating" { "0" } else { "" };
+        if value == default && xml::text(&doc, tag).is_none() {
+            continue;
+        }
+        if xml::text(&doc, parent).is_none()
+            && *parent != "JamManPatch"
+            && *parent != "JamManPhrase"
+        {
+            let root = if file == PATCH_FILE {
+                "JamManPatch"
+            } else {
+                "JamManPhrase"
+            };
+            doc = xml::set_text(&doc, parent, "", root).ok_or_else(|| {
+                Error::InvalidMetadata(format!("no se puede crear <{parent}> en {file}"))
+            })?;
+        }
+        doc = xml::set_text(&doc, tag, value, parent).ok_or_else(|| {
+            Error::InvalidMetadata(format!("no se puede escribir <{tag}> en {file}"))
+        })?;
+    }
+    Ok(doc)
 }
 
 /// Resultado de leer una posición al listar la tarjeta. Un bucle dañado no
@@ -204,6 +311,106 @@ impl Card {
             return Err(e);
         }
         self.read(slot)
+    }
+
+    /// Guarda los ajustes de un bucle. Solo cambian las etiquetas afectadas; el
+    /// resto de `patch.xml` y `phrase.xml` queda tal cual. Un fichero que no
+    /// cambia no se reescribe.
+    pub fn update(&self, slot: Slot, settings: &LoopSettings) -> Result<Entry> {
+        settings.validate()?;
+        let dir = self.patch_dir(slot);
+        if !dir.is_dir() {
+            return Err(Error::SlotNotFound(slot.get()));
+        }
+        let patch_path = dir.join(PATCH_FILE);
+        let phrase_path = dir.join(PHRASE_DIR).join(PHRASE_FILE);
+        let patch_doc = fs::read_to_string(&patch_path)?;
+        let phrase_doc = fs::read_to_string(&phrase_path)?;
+
+        let s = settings;
+        let new_patch = set_all(
+            patch_doc.clone(),
+            PATCH_FILE,
+            &[
+                ("PatchName", s.name.clone(), "JamManPatch"),
+                ("RhythmType", s.rhythm_type.clone(), "JamManPatch"),
+                ("StopMode", s.stop_mode.clone(), "JamManPatch"),
+                ("Description", s.description.clone(), "Metadata"),
+                ("Artist", s.artist.clone(), "Metadata"),
+                ("Genre", s.genre.clone(), "Metadata"),
+                ("Rating", s.rating.to_string(), "Metadata"),
+                ("Tags", s.tags.clone(), "Metadata"),
+            ],
+        )?;
+        let flag = |b: bool| if b { "1" } else { "0" }.to_owned();
+        let new_phrase = set_all(
+            phrase_doc.clone(),
+            PHRASE_FILE,
+            &[
+                ("BeatsPerMinute", s.bpm.to_string(), "JamManPhrase"),
+                (
+                    "BeatsPerMeasure",
+                    s.beats_per_measure.to_string(),
+                    "JamManPhrase",
+                ),
+                ("IsLoop", flag(s.is_loop), "JamManPhrase"),
+                ("IsReversed", flag(s.is_reversed), "JamManPhrase"),
+            ],
+        )?;
+
+        if new_patch != patch_doc {
+            fs::write(&patch_path, new_patch)?;
+        }
+        if new_phrase != phrase_doc {
+            fs::write(&phrase_path, new_phrase)?;
+        }
+        self.read(slot)
+    }
+
+    /// Mueve un bucle a una posición libre.
+    pub fn move_to(&self, from: Slot, to: Slot) -> Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        let source = self.patch_dir(from);
+        if !source.is_dir() {
+            return Err(Error::SlotNotFound(from.get()));
+        }
+        let target = self.patch_dir(to);
+        if target.exists() {
+            return Err(Error::SlotOccupied(to.get()));
+        }
+        fs::rename(source, target)?;
+        Ok(())
+    }
+
+    /// Intercambia dos posiciones. Si la segunda está libre, equivale a mover.
+    pub fn swap(&self, a: Slot, b: Slot) -> Result<()> {
+        if a == b {
+            return Ok(());
+        }
+        let (dir_a, dir_b) = (self.patch_dir(a), self.patch_dir(b));
+        if !dir_a.is_dir() {
+            return Err(Error::SlotNotFound(a.get()));
+        }
+        if !dir_b.exists() {
+            return self.move_to(a, b);
+        }
+        let tmp = self
+            .root
+            .join(format!("{TMP_PREFIX}swap-{}", patch_dir_name(a)));
+        fs::rename(&dir_a, &tmp)?;
+        if let Err(e) = fs::rename(&dir_b, &dir_a) {
+            let _ = fs::rename(&tmp, &dir_a);
+            return Err(e.into());
+        }
+        if let Err(e) = fs::rename(&tmp, &dir_b) {
+            // Deshace para no dejar la tarjeta a medias.
+            let _ = fs::rename(&dir_a, &dir_b);
+            let _ = fs::rename(&tmp, &dir_a);
+            return Err(e.into());
+        }
+        Ok(())
     }
 
     /// Cambia el nombre de un bucle. El resto de `patch.xml` no se toca.
@@ -439,6 +646,153 @@ mod tests {
             card.rename(slot(8), "x"),
             Err(Error::SlotNotFound(8))
         ));
+    }
+
+    #[test]
+    fn update_changes_only_the_edited_values() {
+        let (dir, card) = new_card();
+        let src = write_source(&dir, "a.wav", &pedal_wav(4));
+        let entry = card.import_wav(slot(1), &src, "viejo").unwrap();
+        let mut s = LoopSettings::from_entry(&entry);
+        s.name = "Nuevo".into();
+        s.rhythm_type = RhythmType::Conga.xml().into();
+        s.stop_mode = StopMode::Fade.xml().into();
+        s.bpm = 96.5;
+        s.beats_per_measure = 3;
+        s.is_loop = true;
+        s.is_reversed = true;
+        s.artist = "Hendrix".into();
+        s.genre = "Blues".into();
+        s.rating = 4;
+
+        let updated = card.update(slot(1), &s).unwrap();
+        assert_eq!(LoopSettings::from_entry(&updated), s);
+        assert_eq!(updated.patch.id, entry.patch.id, "el GUID no cambia");
+
+        let patch = fs::read_to_string(card.root().join("Patch01/patch.xml")).unwrap();
+        assert!(
+            patch.contains("\r\n  <RhythmType>Conga</RhythmType>\r\n"),
+            "{patch}"
+        );
+        assert!(
+            !patch.contains("\n\n<J") || patch.starts_with("<?xml"),
+            "formato intacto"
+        );
+    }
+
+    #[test]
+    fn update_without_changes_does_not_rewrite() {
+        let (dir, card) = new_card();
+        let src = write_source(&dir, "a.wav", &pedal_wav(4));
+        let entry = card.import_wav(slot(1), &src, "x").unwrap();
+        let before = fs::read(card.root().join("Patch01/patch.xml")).unwrap();
+        card.update(slot(1), &LoopSettings::from_entry(&entry))
+            .unwrap();
+        assert_eq!(
+            fs::read(card.root().join("Patch01/patch.xml")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn update_fills_metadata_of_a_pedal_recorded_loop() {
+        let (_dir, card) = new_card();
+        let phrase = card.root().join("Patch24/PhraseA");
+        fs::create_dir_all(&phrase).unwrap();
+        fs::write(
+            card.root().join("Patch24/patch.xml"),
+            "<JamManPatch>\n    <PatchName></PatchName>\n    <RhythmType>Silence</RhythmType>\n    <StopMode>StopInstantly</StopMode>\n    <ID>a</ID>\n    <Metadata />\n</JamManPatch>\n",
+        )
+        .unwrap();
+        fs::write(
+            phrase.join("phrase.xml"),
+            "<JamManPhrase>\n    <BeatsPerMinute>51.06</BeatsPerMinute>\n    <BeatsPerMeasure>4</BeatsPerMeasure>\n    <BpmValidated>1</BpmValidated>\n    <IsLoop>1</IsLoop>\n    <IsReversed>0</IsReversed>\n    <ID>b</ID>\n</JamManPhrase>\n",
+        )
+        .unwrap();
+        fs::write(phrase.join("phrase.wav"), pedal_wav(8)).unwrap();
+
+        let mut s = LoopSettings::from_entry(&card.read(slot(24)).unwrap());
+        s.name = "Grabado en el pedal".into();
+        s.artist = "Yo".into();
+        let e = card.update(slot(24), &s).unwrap();
+        assert_eq!(e.patch.name, "Grabado en el pedal");
+        assert_eq!(e.patch.artist, "Yo");
+        let patch = fs::read_to_string(card.root().join("Patch24/patch.xml")).unwrap();
+        assert!(
+            patch.contains("    <Metadata>\n        <Artist>Yo</Artist>\n    </Metadata>"),
+            "{patch}"
+        );
+        assert!(
+            !patch.contains("<Description>"),
+            "no se añaden etiquetas vacías"
+        );
+        let phrase = fs::read_to_string(phrase.join("phrase.xml")).unwrap();
+        assert!(
+            phrase.contains("<BpmValidated>1</BpmValidated>"),
+            "se conservan campos desconocidos"
+        );
+    }
+
+    #[test]
+    fn update_rejects_out_of_range_settings() {
+        let (dir, card) = new_card();
+        let src = write_source(&dir, "a.wav", &pedal_wav(4));
+        let entry = card.import_wav(slot(1), &src, "x").unwrap();
+        let ok = LoopSettings::from_entry(&entry);
+        for bad in [
+            LoopSettings {
+                bpm: 39.0,
+                ..ok.clone()
+            },
+            LoopSettings {
+                beats_per_measure: 16,
+                ..ok.clone()
+            },
+            LoopSettings {
+                rating: 6,
+                ..ok.clone()
+            },
+        ] {
+            assert!(matches!(
+                card.update(slot(1), &bad),
+                Err(Error::InvalidSetting(_))
+            ));
+        }
+        assert!(matches!(
+            card.update(slot(2), &ok),
+            Err(Error::SlotNotFound(2))
+        ));
+    }
+
+    #[test]
+    fn move_and_swap_positions() {
+        let (dir, card) = new_card();
+        let src = write_source(&dir, "a.wav", &pedal_wav(4));
+        card.import_wav(slot(1), &src, "uno").unwrap();
+        card.import_wav(slot(2), &src, "dos").unwrap();
+
+        card.move_to(slot(1), slot(10)).unwrap();
+        assert_eq!(card.read(slot(10)).unwrap().patch.name, "uno");
+        assert!(matches!(
+            card.move_to(slot(10), slot(2)),
+            Err(Error::SlotOccupied(2))
+        ));
+        assert!(matches!(
+            card.move_to(slot(1), slot(3)),
+            Err(Error::SlotNotFound(1))
+        ));
+
+        card.swap(slot(10), slot(2)).unwrap();
+        assert_eq!(card.read(slot(2)).unwrap().patch.name, "uno");
+        assert_eq!(card.read(slot(10)).unwrap().patch.name, "dos");
+
+        card.swap(slot(2), slot(50)).unwrap(); // destino libre: mueve
+        assert_eq!(card.read(slot(50)).unwrap().patch.name, "uno");
+        let names: Vec<_> = fs::read_dir(card.root())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "sin restos temporales: {names:?}");
     }
 
     #[test]

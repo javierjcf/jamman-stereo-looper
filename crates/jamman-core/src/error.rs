@@ -46,6 +46,8 @@ pub enum Error {
     SlotOccupied(u8),
     /// Los metadatos (`patch.xml` o `phrase.xml`) están incompletos o dañados.
     InvalidMetadata(String),
+    /// Un ajuste del bucle está fuera de rango.
+    InvalidSetting(String),
     /// Error de entrada/salida.
     Io(std::io::Error),
 }
@@ -85,6 +87,7 @@ impl fmt::Display for Error {
             Self::SlotNotFound(n) => write!(f, "no hay ningún bucle en la posición {n}"),
             Self::SlotOccupied(n) => write!(f, "la posición {n} ya está ocupada"),
             Self::InvalidMetadata(why) => write!(f, "metadatos inválidos: {why}"),
+            Self::InvalidSetting(why) => write!(f, "ajuste no válido: {why}"),
             Self::Io(e) => write!(f, "error de E/S: {e}"),
         }
     }

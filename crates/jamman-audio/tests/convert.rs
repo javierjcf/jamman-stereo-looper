@@ -216,3 +216,21 @@ fn waveform_rejects_non_16_bit_files() {
         Err(AudioError::Unsupported(_))
     ));
 }
+
+#[test]
+fn large_files_are_sampled_and_still_follow_the_signal() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("grande.wav");
+    // 60 s estéreo 16 bit ≈ 10,6 MB: por encima del umbral de muestreo.
+    let frames = 44_100 * 60;
+    write_pcm_wav(&src, 44_100, 2, 16, frames, |f, _| {
+        if f < frames / 2 { 0.0 } else { 0.5 }
+    });
+    let peaks = waveform(&src, 100).unwrap();
+    assert_eq!(peaks.len(), 100);
+    assert!(peaks[..49].iter().all(|&p| p == 0.0), "{peaks:?}");
+    assert!(
+        peaks[51..].iter().all(|p| (p - 0.5).abs() < 0.01),
+        "{peaks:?}"
+    );
+}

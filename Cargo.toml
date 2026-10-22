@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/jamman-core", "crates/jamman-cli"]
+members = ["crates/jamman-core", "crates/jamman-audio", "crates/jamman-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,3 +15,9 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Dependencias optimizadas también en desarrollo: decodificar y remuestrear
+# audio sin optimizar es decenas de veces más lento. Nuestro código sigue
+# compilando rápido.
+[profile.dev.package."*"]
+opt-level = 3

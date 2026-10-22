@@ -1,0 +1,19 @@
+[package]
+name = "jamman-audio"
+description = "Conversión de audio al formato del JamMan Stereo y forma de onda"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+jamman-core = { path = "../jamman-core" }
+rubato = "5.0.1"
+symphonia = { version = "0.6.1", features = ["mp3", "aac", "isomp4", "aiff", "alac"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -19,7 +19,7 @@ pub enum Storage {
 }
 
 /// Posición de bucle validada (1 a 99).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Slot(u8);
 
 impl Slot {

@@ -218,6 +218,12 @@ impl Library {
         }
     }
 
+    /// Primera posición libre desde `start` (incluida).
+    pub fn first_free_from(&self, start: Slot) -> Option<Slot> {
+        let occupied: Vec<Slot> = self.rows.iter().map(|r| r.slot).collect();
+        jamman_core::device::first_free_from(&occupied, start)
+    }
+
     /// Todas las filas, por posición.
     pub fn rows(&self) -> &[Row] {
         &self.rows
@@ -436,6 +442,13 @@ mod tests {
         assert!(!lib.has_unsaved_changes(), "tras guardar no hay cambios");
         assert_eq!(lib.row(slot(5)).unwrap().name(), "nuevo");
         assert_eq!(lib.selected(), Some(slot(5)), "se conserva la selección");
+    }
+
+    #[test]
+    fn free_slots_are_proposed_from_the_listing() {
+        let (_d, lib) = library_with(&[(1, "a", 4), (2, "b", 4), (4, "c", 4)]);
+        assert_eq!(lib.first_free_from(slot(1)), Some(slot(3)));
+        assert_eq!(lib.first_free_from(slot(4)), Some(slot(5)));
     }
 
     #[test]

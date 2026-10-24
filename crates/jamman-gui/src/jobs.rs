@@ -13,7 +13,7 @@ use std::thread;
 use eframe::egui;
 use jamman_audio::{ConvertOptions, convert_to_pedal_wav, needs_conversion};
 use jamman_core::card::{Card, Listing, LoopSettings};
-use jamman_core::device::Slot;
+use jamman_core::device::{Slot, first_free_from};
 use jamman_core::store::LoopStore;
 
 /// Avance de un trabajo.
@@ -63,12 +63,15 @@ pub enum TransferEvent {
 pub enum Op {
     /// Solo leer la lista de bucles.
     List,
-    /// Convertir si hace falta y añadir en las primeras posiciones libres.
+    /// Convertir si hace falta y añadir en las posiciones libres a partir de
+    /// `start`, saltando las ocupadas.
     Import {
         /// Ficheros de audio.
         files: Vec<PathBuf>,
         /// Normalizar el volumen.
         normalize: bool,
+        /// Primera posición en la que se puede copiar.
+        start: Slot,
     },
     /// Copiar el audio de bucles `(posición, nombre)` a una carpeta.
     Export {
@@ -240,11 +243,18 @@ fn run_op(
     };
     match op {
         Op::List => Ok(()),
-        Op::Import { files, normalize } => {
+        Op::Import {
+            files,
+            normalize,
+            start,
+        } => {
             let items = files.into_iter().map(|p| (display_name(&p), p)).collect();
             run_steps(items, tx, ctx, |path| {
-                let slot = store.first_free_slot()?.ok_or_else(|| {
-                    StepError::Local("no quedan posiciones libres (99 bucles)".into())
+                let slot = first_free_from(&store.slots()?, start).ok_or_else(|| {
+                    StepError::Local(format!(
+                        "no quedan posiciones libres desde la {:02}",
+                        start.get()
+                    ))
                 })?;
                 let workdir = tempfile::tempdir().map_err(|e| StepError::Local(e.to_string()))?;
                 let wav = prepare_wav(
@@ -499,6 +509,7 @@ mod tests {
             Op::Import {
                 files: vec![mp3.clone(), mp3],
                 normalize: false,
+                start: Slot::new(1).unwrap(),
             },
         );
         let out = dir.path().join("salida");
@@ -628,6 +639,7 @@ mod tests {
                 Op::Import {
                     files: vec![mp3(), mp3(), mp3()],
                     normalize: false,
+                    start: Slot::new(1).unwrap(),
                 },
             );
             let failures: Vec<&str> = events
@@ -674,6 +686,7 @@ mod tests {
                 Op::Import {
                     files: vec![mp3()],
                     normalize: false,
+                    start: Slot::new(1).unwrap(),
                 },
             );
             assert!(
@@ -848,6 +861,7 @@ mod tests {
             Op::Import {
                 files: vec![mp3, junk],
                 normalize: false,
+                start: Slot::new(1).unwrap(),
             },
         );
 
@@ -877,6 +891,31 @@ mod tests {
     }
 
     #[test]
+    fn import_starts_at_the_chosen_slot_and_skips_occupied_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = Card::create(dir.path()).unwrap();
+        std::fs::create_dir(card.root().join("Patch06")).unwrap();
+        let mp3 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../jamman-audio/tests/fixtures/tono-mono-22k.mp3");
+        let events = run_card(
+            &card,
+            Op::Import {
+                files: vec![mp3.clone(), mp3],
+                normalize: false,
+                start: Slot::new(5).unwrap(),
+            },
+        );
+        let imported: Vec<u8> = events
+            .iter()
+            .filter_map(|e| match e {
+                TransferEvent::Imported(slot) => Some(slot.get()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(imported, [5, 7]);
+    }
+
+    #[test]
     fn import_into_a_full_card_fails_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         let card = Card::create(dir.path()).unwrap();
@@ -890,6 +929,7 @@ mod tests {
             Op::Import {
                 files: vec![mp3],
                 normalize: false,
+                start: Slot::new(1).unwrap(),
             },
         );
         assert!(events.iter().any(

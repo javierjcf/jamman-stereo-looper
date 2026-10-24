@@ -156,7 +156,15 @@ correcto pero con contenido viejo de la tarjeta, y el pedal llegó a colgarse.
 La memoria interna, en las mismas condiciones, funcionaba perfectamente
 (probado con `examples/write_verify`). El corte coincide con 2 GiB (2³¹): o la
 tarjeta es falsa o está defectuosa, o el pedal falla al escribir más allá de
-ese punto. Pendiente de comprobar la tarjeta en el PC con `f3`.
+ese punto.
+
+**Resuelto (24/10/2026): la tarjeta estaba averiada.** Con la tarjeta en el PC
+pasa lo mismo: Linux da las escrituras por terminadas (`sync` no tiene nada
+pendiente), pero al leer directamente del dispositivo (`dd iflag=direct`) los
+ficheros nuevos tienen el contenido viejo, y al volver a montarla los cambios
+han desaparecido, incluidos los borrados. Los bucles antiguos coinciden byte a
+byte. Es el fallo típico de una tarjeta gastada: lee bien pero descarta lo que
+se escribe. El pedal y la app no tenían la culpa.
 
 ### Observaciones útiles
 

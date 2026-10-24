@@ -136,6 +136,8 @@ pub struct JamApp {
     pub pedal_port: Option<String>,
     /// Normalizar el volumen al importar.
     pub normalize: bool,
+    /// Posición desde la que se copia al importar; `None`: el primer hueco.
+    pub import_start: Option<Slot>,
     /// Último mensaje.
     pub status: Option<Status>,
     /// Transferencia en curso.
@@ -171,6 +173,7 @@ impl JamApp {
             detected: detect::find_cards(),
             pedal_port: jamman_core::serial::find_pedal(),
             normalize: false,
+            import_start: None,
             status: None,
             transfer: None,
             transfer_report: None,
@@ -418,6 +421,25 @@ impl JamApp {
         self.start_import(paths, ctx);
     }
 
+    /// Posición desde la que se copiará al importar: la elegida o, si no, el
+    /// primer hueco libre.
+    pub fn import_slot(&self) -> Option<Slot> {
+        self.import_start
+            .or_else(|| self.lib.first_free_from(Slot::new(1).ok()?))
+    }
+
+    /// Motivo por el que no se puede importar en la posición elegida.
+    pub fn import_blocked(&self) -> Option<String> {
+        match self.import_slot() {
+            None => Some("No quedan posiciones libres.".to_owned()),
+            Some(s) if self.lib.row(s).is_some() => Some(format!(
+                "La posición {:02} está ocupada: elige un hueco libre.",
+                s.get()
+            )),
+            Some(_) => None,
+        }
+    }
+
     /// Importa ficheros (o el audio de las carpetas indicadas).
     pub fn start_import(&mut self, paths: Vec<PathBuf>, ctx: &egui::Context) {
         if !self.lib.is_open() {
@@ -433,9 +455,23 @@ impl JamApp {
             self.error("No hay ficheros de audio compatibles (WAV, MP3, FLAC, OGG, AIFF, M4A).");
             return;
         }
+        if let Some(why) = self.import_blocked() {
+            self.error(why);
+            return;
+        }
+        let Some(start) = self.import_slot() else {
+            return;
+        };
         self.player.stop();
         let normalize = self.normalize;
-        self.start(Op::Import { files, normalize }, TransferKind::Import, ctx);
+        let op = Op::Import {
+            files,
+            normalize,
+            start,
+        };
+        self.start(op, TransferKind::Import, ctx);
+        // La próxima vez se vuelve a proponer el primer hueco libre.
+        self.import_start = None;
     }
 
     /// Exporta los bucles seleccionados a la carpeta del explorador.

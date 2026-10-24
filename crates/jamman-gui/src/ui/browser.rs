@@ -3,6 +3,8 @@
 use eframe::egui::{self, Align, Layout, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
+use jamman_core::device::{SLOTS_PER_STORAGE, Slot};
+
 use crate::app::JamApp;
 use crate::{fmt, theme};
 
@@ -115,6 +117,30 @@ fn footer(app: &mut JamApp, ui: &mut egui::Ui) {
         "a la tarjeta"
     };
     ui.horizontal(|ui| {
+        ui.label("Desde la posición");
+        let mut n = app.import_slot().map_or(1, Slot::get);
+        if ui
+            .add(egui::DragValue::new(&mut n).range(1..=SLOTS_PER_STORAGE))
+            .on_hover_text("Las canciones van a los huecos libres a partir de aquí")
+            .changed()
+        {
+            app.import_start = Slot::new(n).ok();
+        }
+        match app.import_blocked() {
+            Some(why) => {
+                let text = if app.import_slot().is_some() {
+                    "ocupada"
+                } else {
+                    "sin huecos"
+                };
+                ui.colored_label(theme::DANGER, text).on_hover_text(why);
+            }
+            None => {
+                ui.weak("libre");
+            }
+        }
+    });
+    ui.horizontal(|ui| {
         let label = if selected == 0 {
             format!("➡ Añadir {target}")
         } else {
@@ -123,13 +149,19 @@ fn footer(app: &mut JamApp, ui: &mut egui::Ui) {
         let button = egui::Button::new(RichText::new(label).strong());
         if ui
             .add_enabled(
-                app.can_transfer() && !app.browser.selection.is_empty(),
+                app.can_transfer()
+                    && !app.browser.selection.is_empty()
+                    && app.import_blocked().is_none(),
                 button,
             )
             .on_hover_text(format!(
                 "Convierte y copia {target} lo seleccionado (ficheros o carpetas)"
             ))
-            .on_disabled_hover_text("Selecciona canciones y abre una tarjeta o el pedal")
+            .on_disabled_hover_text(
+                app.import_blocked().unwrap_or_else(|| {
+                    "Selecciona canciones y abre una tarjeta o el pedal".to_owned()
+                }),
+            )
             .clicked()
         {
             app.import_from_browser(ui.ctx());

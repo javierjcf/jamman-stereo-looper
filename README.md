@@ -40,6 +40,9 @@ Funciona de dos formas:
 - **De la tarjeta al equipo**: selecciona bucles y pulsa «⬅ Exportar a la
   carpeta» para copiar sus WAV a la carpeta abierta en el explorador. Nunca se
   sobrescribe nada (se añade «(2)», «(3)»…).
+- **Desde la posición**: el explorador propone el primer hueco libre y se puede
+  cambiar. Las canciones van a los huecos libres a partir de ahí, saltando
+  los ocupados; si la posición elegida está ocupada, no deja añadir.
 - **Selección múltiple** en ambos lados: Ctrl+clic, Mayús+clic y Ctrl+A.
 - Las transferencias van en segundo plano con barra de progreso; al terminar se
   resumen los errores, si los hay.

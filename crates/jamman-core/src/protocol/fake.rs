@@ -1,4 +1,4 @@
-//! Pedal simulado para los tests: habla el protocolo validado con el JamMan
+//! Pedal simulado para los tests (feature `testing`): habla el protocolo validado con el JamMan
 //! real sobre un sistema de ficheros en memoria. Implementa [`Read`] y
 //! [`Write`], así que se usa como transporte de un [`super::Client`].
 
@@ -17,7 +17,7 @@ struct Open {
 }
 
 /// Pedal simulado.
-pub(crate) struct FakePedal {
+pub struct FakePedal {
     /// Ficheros: ruta → contenido.
     pub files: BTreeMap<String, Vec<u8>>,
     /// Carpetas existentes.
@@ -38,6 +38,7 @@ fn parent(path: &str) -> &str {
 
 impl FakePedal {
     /// Pedal con las carpetas de la memoria interna y de la tarjeta.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let dirs = [
             "/",

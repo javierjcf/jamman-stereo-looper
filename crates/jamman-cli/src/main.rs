@@ -105,10 +105,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn connect(
-    name: Option<String>,
-) -> Result<Client<Box<dyn serialport::SerialPort>>, Box<dyn Error>> {
-    Ok(Client::new(port::open(name)?))
+fn connect(name: Option<String>) -> Result<Client<jamman_core::serial::Port>, Box<dyn Error>> {
+    Ok(jamman_core::serial::connect(name.as_deref())?)
 }
 
 fn about() {

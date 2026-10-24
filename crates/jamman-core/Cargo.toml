@@ -10,7 +10,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Conexión con el pedal por su puerto serie USB.
+serial = ["dep:serialport"]
+# Pedal simulado (`protocol::fake`) para los tests de otros crates.
+testing = []
+
 [dependencies]
+serialport = { version = "4.10.1", optional = true }
 uuid = { version = "1.28.0", features = ["v4"] }
 
 [dev-dependencies]

@@ -8,11 +8,8 @@ use jamman_audio::{ConvertOptions, convert_to_pedal_wav, needs_conversion};
 use jamman_core::card::Card;
 use jamman_core::device::Slot;
 use jamman_core::pedal::{PedalStore, Storage};
-use jamman_core::protocol::Client;
-use serialport::SerialPort;
 
 use crate::args::{take_flag, take_option};
-use crate::port;
 
 pub const HELP: &str = "\
 COMANDOS DEL PEDAL POR USB (<almacén>: interna | tarjeta):
@@ -24,7 +21,7 @@ COMANDOS DEL PEDAL POR USB (<almacén>: interna | tarjeta):
     pedal backup <almacén> <carpeta>           Copia todos los bucles a <carpeta>/JamManStereo
     pedal restore <carpeta> <almacén>          Sube los bucles de una copia (solo a posiciones libres)";
 
-type Store = PedalStore<Box<dyn SerialPort>>;
+type Store = PedalStore<jamman_core::serial::Port>;
 
 fn storage(text: &str) -> Result<Storage, Box<dyn Error>> {
     match text.to_lowercase().as_str() {
@@ -63,7 +60,7 @@ fn progress(label: &str) -> impl FnMut(u64, u64) + '_ {
 }
 
 fn open(port_name: Option<String>, where_: Storage) -> Result<Store, Box<dyn Error>> {
-    let mut store = PedalStore::new(Client::new(port::open(port_name)?), where_);
+    let mut store = PedalStore::new(jamman_core::serial::connect(port_name.as_deref())?, where_);
     if !store.available()? {
         return Err(format!(
             "{} no disponible (¿falta la tarjeta en el pedal?)",

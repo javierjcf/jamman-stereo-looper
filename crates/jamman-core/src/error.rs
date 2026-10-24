@@ -50,6 +50,10 @@ pub enum Error {
     InvalidSetting(String),
     /// La posición tiene ajustes guardados pero ningún audio grabado.
     MissingAudio(u8),
+    /// No hay ningún JamMan conectado por USB.
+    PedalNotFound,
+    /// Error del puerto serie.
+    Serial(String),
     /// Error de entrada/salida.
     Io(std::io::Error),
 }
@@ -94,6 +98,11 @@ impl fmt::Display for Error {
                 f,
                 "la posición {n} tiene ajustes guardados pero ningún audio grabado"
             ),
+            Self::PedalNotFound => write!(
+                f,
+                "no se encuentra ningún JamMan conectado por USB (1210:0020)"
+            ),
+            Self::Serial(why) => write!(f, "puerto serie: {why}"),
             Self::Io(e) => write!(f, "error de E/S: {e}"),
         }
     }

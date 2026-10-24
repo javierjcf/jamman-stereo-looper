@@ -1,4 +1,4 @@
-//! Tabla central con los bucles de la tarjeta.
+//! Tabla central con los bucles del destino abierto (tarjeta o pedal).
 
 use eframe::egui::{self, Align, Layout, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
@@ -252,12 +252,13 @@ fn empty_state(ui: &mut egui::Ui) {
         ui.label(RichText::new("💾").size(48.0));
         ui.add_space(8.0);
         ui.label(
-            RichText::new("No hay ninguna tarjeta abierta")
+            RichText::new("No hay ninguna tarjeta ni pedal abierto")
                 .size(20.0)
                 .strong(),
         );
         ui.add_space(4.0);
         ui.weak("Inserta la tarjeta SD del JamMan en el ordenador y pulsa «Detectar»,");
         ui.weak("o ábrela con «Abrir carpeta…». No hace falta conectar el pedal.");
+        ui.weak("Si conectas el pedal por USB, también aparece en el selector.");
     });
 }

@@ -34,13 +34,15 @@ impl<T: Read + Write> Client<T> {
 
     fn read_frame(&mut self) -> Result<(Header, Vec<u8>)> {
         let mut head = [0u8; HEADER_LEN];
-        self.io.read_exact(&mut head)?;
+        self.io.read_exact(&mut head).map_err(Error::Connection)?;
         let header = Header::parse(&head)?;
         if header.payload_len > MAX_RESPONSE_PAYLOAD {
             return Err(Error::PayloadTooLarge(header.payload_len));
         }
         let mut payload = vec![0u8; header.payload_len as usize];
-        self.io.read_exact(&mut payload)?;
+        self.io
+            .read_exact(&mut payload)
+            .map_err(Error::Connection)?;
         Ok((header, payload))
     }
 
@@ -53,8 +55,10 @@ impl<T: Read + Write> Client<T> {
         let serial = self.next_serial;
         self.next_serial = self.next_serial.wrapping_add(1);
 
-        self.io.write_all(&request.encode(serial)?)?;
-        self.io.flush()?;
+        self.io
+            .write_all(&request.encode(serial)?)
+            .and_then(|()| self.io.flush())
+            .map_err(Error::Connection)?;
 
         loop {
             let (header, payload) = self.read_frame()?;
@@ -403,9 +407,11 @@ mod tests {
     }
 
     #[test]
-    fn missing_reply_is_an_io_error() {
+    fn missing_reply_is_a_connection_error() {
         let mut client = Client::new(Mock::with_replies(vec![]));
-        assert!(matches!(client.call(&Request::WhoAmI), Err(Error::Io(_))));
+        let err = client.call(&Request::WhoAmI).unwrap_err();
+        assert!(matches!(err, Error::Connection(_)), "{err:?}");
+        assert!(err.breaks_connection());
     }
 
     #[test]

@@ -9,6 +9,7 @@ use std::time::Duration;
 use serialport::{DataBits, Parity, SerialPort, SerialPortType, StopBits};
 
 use crate::device::{USB_PRODUCT_ID, USB_VENDOR_ID};
+use crate::pedal::{PedalStore, Storage};
 use crate::protocol::Client;
 use crate::{Error, Result};
 
@@ -89,4 +90,9 @@ pub fn open(name: Option<&str>) -> Result<Port> {
 /// Abre el pedal y devuelve un cliente del protocolo.
 pub fn connect(name: Option<&str>) -> Result<Client<Port>> {
     Ok(Client::new(open(name)?))
+}
+
+/// Abre el pedal y uno de sus almacenes, comprobando que esté disponible.
+pub fn open_store(name: Option<&str>, storage: Storage) -> Result<PedalStore<Port>> {
+    PedalStore::open(connect(name)?, storage)
 }

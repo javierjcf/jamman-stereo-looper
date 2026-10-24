@@ -87,6 +87,16 @@ impl<T: Read + Write> PedalStore<T> {
         Self { client, storage }
     }
 
+    /// Como [`PedalStore::new`], pero comprueba que el almacén esté
+    /// disponible (la tarjeta puede no estar metida en el pedal).
+    pub fn open(client: Client<T>, storage: Storage) -> Result<Self> {
+        let mut store = Self::new(client, storage);
+        if !store.available()? {
+            return Err(Error::StorageUnavailable(storage));
+        }
+        Ok(store)
+    }
+
     /// Almacén actual.
     pub fn storage(&self) -> Storage {
         self.storage
@@ -596,5 +606,11 @@ mod tests {
         p.dirs.remove(SD);
         let mut s = store(p, Storage::Card);
         assert!(!s.available().unwrap(), "sin tarjeta en el pedal");
+        let client = s.into_client();
+        assert!(matches!(
+            PedalStore::open(client, Storage::Card),
+            Err(Error::StorageUnavailable(Storage::Card))
+        ));
+        assert!(PedalStore::open(Client::new(FakePedal::new()), Storage::Card).is_ok());
     }
 }

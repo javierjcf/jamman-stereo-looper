@@ -6,6 +6,7 @@ mod args;
 mod card_cmd;
 mod pedal_cmd;
 mod port;
+mod store_cmd;
 
 use std::error::Error;
 use std::fs;

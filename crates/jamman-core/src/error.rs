@@ -57,10 +57,14 @@ pub enum Error {
         /// Bytes libres.
         free: u64,
     },
+    /// El almacén del pedal no está disponible (falta la tarjeta).
+    StorageUnavailable(crate::pedal::Storage),
     /// No hay ningún JamMan conectado por USB.
     PedalNotFound,
-    /// Error del puerto serie.
+    /// Error del puerto serie al abrirlo o configurarlo.
     Serial(String),
+    /// Falló la comunicación con el pedal (leer o escribir en el puerto).
+    Connection(std::io::Error),
     /// Error de entrada/salida.
     Io(std::io::Error),
 }
@@ -72,7 +76,7 @@ impl Error {
     pub fn breaks_connection(&self) -> bool {
         matches!(
             self,
-            Self::Io(_)
+            Self::Connection(_)
                 | Self::Serial(_)
                 | Self::Truncated { .. }
                 | Self::InvalidUtf8
@@ -129,15 +133,21 @@ impl fmt::Display for Error {
                 *needed as f64 / 1e6,
                 *free as f64 / 1e6
             ),
+            Self::StorageUnavailable(s) => write!(
+                f,
+                "{} no disponible: ¿está la tarjeta metida en el pedal?",
+                s.label()
+            ),
             Self::PedalNotFound => write!(
                 f,
                 "no se encuentra ningún JamMan conectado por USB (1210:0020)"
             ),
             Self::Serial(why) => write!(f, "puerto serie: {why}"),
-            Self::Io(e) if e.kind() == std::io::ErrorKind::TimedOut => write!(
+            Self::Connection(e) if e.kind() == std::io::ErrorKind::TimedOut => write!(
                 f,
                 "el pedal no responde; si no se recupera, apágalo y vuelve a encenderlo"
             ),
+            Self::Connection(e) => write!(f, "comunicación con el pedal: {e}"),
             Self::Io(e) => write!(f, "error de E/S: {e}"),
         }
     }
@@ -146,7 +156,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(e) => Some(e),
+            Self::Io(e) | Self::Connection(e) => Some(e),
             _ => None,
         }
     }
@@ -164,9 +174,14 @@ mod tests {
 
     #[test]
     fn only_transport_and_framing_errors_break_the_connection() {
-        let timeout = Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        let timeout = Error::Connection(std::io::Error::from(std::io::ErrorKind::TimedOut));
         assert!(timeout.breaks_connection());
         assert!(timeout.to_string().contains("no responde"));
+        let local = Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(
+            !local.breaks_connection(),
+            "un fichero del equipo no corta el pedal"
+        );
         assert!(
             Error::Truncated {
                 needed: 4,

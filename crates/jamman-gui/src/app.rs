@@ -10,7 +10,7 @@ use jamman_core::device::Slot;
 use jamman_core::pedal::Storage;
 
 use crate::browser::{self, LocalBrowser};
-use crate::jobs::{self, PedalOp, TransferEvent, WaveformResult};
+use crate::jobs::{self, Op, TransferEvent, WaveformResult};
 use crate::player::Player;
 use crate::selection::ClickMods;
 use crate::state::Library;
@@ -47,15 +47,15 @@ pub enum TransferKind {
     Import,
     /// De la tarjeta o el pedal al equipo.
     Export,
-    /// Leer la lista de bucles del pedal.
-    PedalList,
-    /// Borrar bucles del pedal.
+    /// Leer la lista de bucles.
+    List,
+    /// Borrar bucles.
     Delete,
-    /// Guardar ajustes en el pedal.
+    /// Guardar ajustes.
     Save,
-    /// Copia de seguridad del pedal.
+    /// Copia de seguridad en una carpeta del equipo.
     Backup,
-    /// Restaurar una copia en el pedal.
+    /// Traer una copia de seguridad.
     Restore,
 }
 
@@ -65,12 +65,20 @@ impl TransferKind {
         match self {
             Self::Import => "Añadiendo",
             Self::Export => "Exportando",
-            Self::PedalList => "Leyendo el pedal",
+            Self::List => "Leyendo",
             Self::Delete => "Borrando",
             Self::Save => "Guardando",
             Self::Backup => "Copiando",
             Self::Restore => "Restaurando",
         }
+    }
+
+    /// `true` si el trabajo escribe en el destino abierto.
+    fn modifies(self) -> bool {
+        matches!(
+            self,
+            Self::Import | Self::Delete | Self::Save | Self::Restore
+        )
     }
 }
 
@@ -239,57 +247,59 @@ impl JamApp {
         self.lib.open_pedal(storage);
         self.space = None;
         self.after_change();
-        self.start_pedal(PedalOp::List, TransferKind::PedalList, ctx);
+        self.start(Op::List, TransferKind::List, ctx);
     }
 
-    /// Lanza una operación sobre el almacén del pedal mostrado.
-    fn start_pedal(&mut self, op: PedalOp, kind: TransferKind, ctx: &egui::Context) {
-        let Some(storage) = self.lib.pedal() else {
-            return;
-        };
+    /// Lanza una operación en segundo plano sobre lo que esté abierto.
+    fn start(&mut self, op: Op, kind: TransferKind, ctx: &egui::Context) {
         if self.transfer.is_some() {
             self.error("Espera a que termine la operación en curso.");
             return;
         }
-        let total = jobs::pedal_op_total(&op);
-        let port = self.pedal_port.clone();
-        let rx = jobs::spawn_pedal(
-            storage,
-            op,
-            move || jamman_core::serial::connect(port.as_deref()),
-            ctx.clone(),
-        );
+        let total = op.total();
+        let ctx = ctx.clone();
+        let rx = if let Some(storage) = self.lib.pedal() {
+            // El puerto se abre en el hilo del trabajo y se cierra al acabar.
+            let port = self.pedal_port.clone();
+            let open = move || jamman_core::serial::open_store(port.as_deref(), storage);
+            jobs::spawn(storage.label().to_owned(), open, op, ctx)
+        } else if let Some(card) = self.lib.card().cloned() {
+            jobs::spawn("Tarjeta".to_owned(), move || Ok(card), op, ctx)
+        } else {
+            self.error("Abre primero una tarjeta o el pedal.");
+            return;
+        };
         self.transfer = Some(TransferState::new(rx, kind, total));
     }
 
     /// Botón de recargar: relee la tarjeta o pide de nuevo la lista al pedal.
     pub fn refresh(&mut self, ctx: &egui::Context) {
         if self.lib.pedal().is_some() {
-            self.start_pedal(PedalOp::List, TransferKind::PedalList, ctx);
+            self.start(Op::List, TransferKind::List, ctx);
         } else {
             self.reload();
         }
     }
 
-    /// Copia de seguridad del almacén del pedal en una carpeta elegida.
+    /// Copia de seguridad de lo abierto en una carpeta elegida.
     pub fn backup(&mut self, ctx: &egui::Context) {
         if let Some(dir) = rfd::FileDialog::new()
-            .set_title("Carpeta para la copia de seguridad del pedal")
+            .set_title("Carpeta para la copia de seguridad")
             .set_directory(self.browser.dir())
             .pick_folder()
         {
-            self.start_pedal(PedalOp::Backup { dir }, TransferKind::Backup, ctx);
+            self.start(Op::Backup { dir }, TransferKind::Backup, ctx);
         }
     }
 
-    /// Sube al pedal los bucles de una copia (solo a posiciones libres).
+    /// Trae los bucles de una copia (solo a posiciones libres).
     pub fn restore(&mut self, ctx: &egui::Context) {
         if let Some(dir) = rfd::FileDialog::new()
-            .set_title("Copia de seguridad que se va a subir al pedal")
+            .set_title("Copia de seguridad que se va a traer")
             .set_directory(self.browser.dir())
             .pick_folder()
         {
-            self.start_pedal(PedalOp::Restore { dir }, TransferKind::Restore, ctx);
+            self.start(Op::Restore { dir }, TransferKind::Restore, ctx);
         }
     }
 
@@ -377,19 +387,12 @@ impl JamApp {
 
     /// Guarda los ajustes en edición.
     pub fn save(&mut self, ctx: &egui::Context) {
-        if self.lib.pedal().is_some() {
-            if let Some(d) = self.lib.draft.as_ref().filter(|d| d.is_dirty()) {
-                let op = PedalOp::Update {
-                    slot: d.slot,
-                    settings: d.edited.clone(),
-                };
-                self.start_pedal(op, TransferKind::Save, ctx);
-            }
-            return;
-        }
-        match self.lib.save_draft() {
-            Ok(()) => self.info(format!("Cambios guardados. {EJECT_HINT}")),
-            Err(e) => self.error(format!("No se pudieron guardar los cambios: {e}")),
+        if let Some(d) = self.lib.draft.as_ref().filter(|d| d.is_dirty()) {
+            let op = Op::Update {
+                slot: d.slot,
+                settings: d.edited.clone(),
+            };
+            self.start(op, TransferKind::Save, ctx);
         }
     }
 
@@ -431,19 +434,8 @@ impl JamApp {
             return;
         }
         self.player.stop();
-        if self.lib.pedal().is_some() {
-            let op = PedalOp::Import {
-                files,
-                normalize: self.normalize,
-            };
-            self.start_pedal(op, TransferKind::Import, ctx);
-            return;
-        }
-        let Some(card) = self.lib.card().cloned() else {
-            return;
-        };
-        let rx = jobs::spawn_import(card, files.clone(), self.normalize, ctx.clone());
-        self.transfer = Some(TransferState::new(rx, TransferKind::Import, files.len()));
+        let normalize = self.normalize;
+        self.start(Op::Import { files, normalize }, TransferKind::Import, ctx);
     }
 
     /// Exporta los bucles seleccionados a la carpeta del explorador.
@@ -454,10 +446,6 @@ impl JamApp {
 
     /// Exporta bucles a la carpeta abierta en el explorador.
     pub fn export_to_browser(&mut self, slots: Vec<Slot>, ctx: &egui::Context) {
-        if self.transfer.is_some() {
-            self.error("Espera a que termine la operación en curso.");
-            return;
-        }
         let loops: Vec<(Slot, String)> = slots
             .into_iter()
             .filter_map(|s| self.lib.row(s).map(|r| (s, r.name().to_owned())))
@@ -466,23 +454,14 @@ impl JamApp {
             return;
         }
         let dir = self.browser.dir().to_path_buf();
-        if self.lib.pedal().is_some() {
-            self.start_pedal(PedalOp::Export { loops, dir }, TransferKind::Export, ctx);
-            return;
-        }
-        let Some(card) = self.lib.card().cloned() else {
-            return;
-        };
-        let total = loops.len();
-        let rx = jobs::spawn_export(card, loops, dir, ctx.clone());
-        self.transfer = Some(TransferState::new(rx, TransferKind::Export, total));
+        self.start(Op::Export { loops, dir }, TransferKind::Export, ctx);
     }
 
     fn poll_transfer(&mut self) {
         let Some(state) = &mut self.transfer else {
             return;
         };
-        let mut card_changed = false;
+        let mut listed = false;
         let mut finished = false;
         loop {
             match state.rx.try_recv() {
@@ -496,7 +475,6 @@ impl JamApp {
                 Ok(TransferEvent::Imported(slot)) => {
                     state.done += 1;
                     state.last_imported = Some(slot);
-                    card_changed = true;
                 }
                 Ok(TransferEvent::Exported(path)) => {
                     state.done += 1;
@@ -514,7 +492,7 @@ impl JamApp {
                 }
                 Ok(TransferEvent::Listed(listing)) => {
                     self.lib.set_listing(listing);
-                    card_changed = true;
+                    listed = true;
                 }
                 Ok(TransferEvent::Space { free, total }) => self.space = Some((free, total)),
                 Ok(TransferEvent::Failed { file, error }) => state.failures.push((file, error)),
@@ -525,8 +503,8 @@ impl JamApp {
                 Err(TryRecvError::Empty) => break,
             }
         }
-        if card_changed {
-            self.reload();
+        if listed {
+            self.after_change();
         }
         if finished && let Some(state) = self.transfer.take() {
             self.finish_transfer(state);
@@ -536,11 +514,11 @@ impl JamApp {
     fn finish_transfer(&mut self, state: TransferState) {
         self.lib.loading = false;
         let errors = state.failures.len();
-        // En el pedal no hay que expulsar nada: el aviso solo vale para la tarjeta.
-        let hint = if self.lib.pedal().is_some() {
-            ""
-        } else {
+        // Solo hay que expulsar la tarjeta del PC, y solo si se escribió en ella.
+        let hint = if self.lib.card().is_some() && state.kind.modifies() {
             EJECT_HINT
+        } else {
+            ""
         };
         let (msg, title) = match state.kind {
             TransferKind::Import => {
@@ -555,19 +533,19 @@ impl JamApp {
                     "Algunas canciones no se pudieron añadir",
                 )
             }
-            TransferKind::PedalList => (
-                format!("{} bucles en el pedal.", self.lib.rows().len()),
-                "No se pudo leer el pedal",
+            TransferKind::List => (
+                format!("{} bucles.", self.lib.rows().len()),
+                "No se pudieron leer los bucles",
             ),
             TransferKind::Delete => (
                 match state.removed.as_slice() {
-                    [one] if errors == 0 => format!("Bucle {:02} borrado del pedal.", one.get()),
-                    _ => format!("{} bucles borrados, {errors} con error.", state.done),
+                    [one] if errors == 0 => format!("Bucle {:02} borrado. {hint}", one.get()),
+                    _ => format!("{} bucles borrados, {errors} con error. {hint}", state.done),
                 },
                 "Algunos bucles no se pudieron borrar",
             ),
             TransferKind::Save => (
-                "Cambios guardados en el pedal.".to_owned(),
+                format!("Cambios guardados. {hint}"),
                 "No se pudieron guardar los cambios",
             ),
             TransferKind::Backup => {
@@ -582,7 +560,7 @@ impl JamApp {
             }
             TransferKind::Restore => (
                 format!(
-                    "Restauración terminada: {} bucles subidos, {errors} omitidos.",
+                    "Restauración terminada: {} bucles copiados, {errors} omitidos. {hint}",
                     state.done
                 ),
                 "Bucles no restaurados",
@@ -693,33 +671,10 @@ impl JamApp {
         if self.player.current().is_some_and(|s| slots.contains(&s)) {
             self.player.stop();
         }
-        if self.lib.pedal().is_some() {
-            let op = PedalOp::Remove {
-                slots: slots.to_vec(),
-            };
-            self.start_pedal(op, TransferKind::Delete, ctx);
-            return;
-        }
-        let Some(card) = self.lib.card().cloned() else {
-            return;
+        let op = Op::Remove {
+            slots: slots.to_vec(),
         };
-        let errors: Vec<String> = slots
-            .iter()
-            .filter_map(|s| {
-                card.remove(*s)
-                    .err()
-                    .map(|e| format!("{:02}: {e}", s.get()))
-            })
-            .collect();
-        self.reload();
-        if errors.is_empty() {
-            self.info(match slots {
-                [one] => format!("Bucle {:02} borrado. {EJECT_HINT}", one.get()),
-                many => format!("{} bucles borrados. {EJECT_HINT}", many.len()),
-            });
-        } else {
-            self.error(format!("No se pudo borrar: {}", errors.join("; ")));
-        }
+        self.start(op, TransferKind::Delete, ctx);
     }
 
     /// Mueve un bucle a otra posición; si está ocupada, las intercambia.

@@ -96,10 +96,15 @@ impl Draft {
 }
 
 /// Origen de los bucles que se muestran.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Source {
+#[derive(Debug, Clone)]
+enum Source {
     /// Tarjeta (o copia) en el PC: se lee directamente.
-    Card(PathBuf),
+    Card {
+        /// Tarjeta abierta.
+        card: Card,
+        /// Ruta que se abrió (punto de montaje o carpeta).
+        mount: PathBuf,
+    },
     /// Un almacén del pedal por USB: la lista llega en segundo plano.
     Pedal(Storage),
 }
@@ -107,8 +112,6 @@ pub enum Source {
 /// Biblioteca: la tarjeta abierta y la vista sobre sus bucles.
 #[derive(Debug, Default)]
 pub struct Library {
-    card: Option<Card>,
-    mount: Option<PathBuf>,
     source: Option<Source>,
     /// `true` mientras se espera la lista del pedal.
     pub loading: bool,
@@ -128,9 +131,10 @@ impl Library {
     /// Abre una tarjeta (punto de montaje o carpeta `JamManStereo`).
     pub fn open(&mut self, path: &Path) -> Result<()> {
         let card = Card::open(path)?;
-        self.mount = Some(path.to_path_buf());
-        self.card = Some(card);
-        self.source = Some(Source::Card(path.to_path_buf()));
+        self.source = Some(Source::Card {
+            card,
+            mount: path.to_path_buf(),
+        });
         self.loading = false;
         self.selection.clear();
         self.draft = None;
@@ -140,8 +144,6 @@ impl Library {
     /// Muestra un almacén del pedal. La lista se rellena con
     /// [`Library::set_listing`] cuando llega del USB.
     pub fn open_pedal(&mut self, storage: Storage) {
-        self.card = None;
-        self.mount = None;
         self.source = Some(Source::Pedal(storage));
         self.rows.clear();
         self.selection.clear();
@@ -164,19 +166,25 @@ impl Library {
 
     /// Tarjeta abierta.
     pub fn card(&self) -> Option<&Card> {
-        self.card.as_ref()
+        match &self.source {
+            Some(Source::Card { card, .. }) => Some(card),
+            _ => None,
+        }
     }
 
     /// Punto de montaje que se abrió.
     pub fn mount(&self) -> Option<&Path> {
-        self.mount.as_deref()
+        match &self.source {
+            Some(Source::Card { mount, .. }) => Some(mount),
+            _ => None,
+        }
     }
 
     /// Vuelve a leer la tarjeta. Conserva la selección de los bucles que sigan
     /// ahí y los cambios sin guardar del bucle principal.
     pub fn reload(&mut self) -> Result<()> {
         // El pedal se recarga en segundo plano (ver `set_listing`).
-        let Some(card) = &self.card else {
+        let Some(card) = self.card() else {
             return Ok(());
         };
         let listing = card.list()?;
@@ -312,27 +320,12 @@ impl Library {
         self.draft.as_ref().is_some_and(Draft::is_dirty)
     }
 
-    /// Marca los ajustes en edición como guardados (tras guardarlos en el
-    /// pedal en segundo plano); la próxima lista trae los valores nuevos.
+    /// Marca los ajustes en edición como guardados (se guardan en segundo
+    /// plano); la próxima lista trae los valores nuevos.
     pub fn mark_draft_saved(&mut self) {
         if let Some(d) = &mut self.draft {
             d.original = d.edited.clone();
         }
-    }
-
-    /// Guarda los ajustes en edición en la tarjeta del PC. Con el pedal no
-    /// hace nada: se guardan en segundo plano.
-    pub fn save_draft(&mut self) -> Result<()> {
-        let (Some(card), Some(draft)) = (&self.card, &self.draft) else {
-            return Ok(());
-        };
-        if draft.is_dirty() {
-            card.update(draft.slot, &draft.edited)?;
-            // Sin borrador, la recarga lo rehace con los valores guardados.
-            self.draft = None;
-            self.reload()?;
-        }
-        Ok(())
     }
 
     /// Descarta los cambios sin guardar.
@@ -435,7 +428,11 @@ mod tests {
         draft.edited.rhythm_type = RhythmType::Click.xml().into();
         assert!(lib.has_unsaved_changes());
 
-        lib.save_draft().unwrap();
+        // Como la app: se guarda en segundo plano y luego llega la lista.
+        let edited = lib.draft.as_ref().unwrap().edited.clone();
+        lib.card().unwrap().update(slot(5), &edited).unwrap();
+        lib.mark_draft_saved();
+        lib.reload().unwrap();
         assert!(!lib.has_unsaved_changes(), "tras guardar no hay cambios");
         assert_eq!(lib.row(slot(5)).unwrap().name(), "nuevo");
         assert_eq!(lib.selected(), Some(slot(5)), "se conserva la selección");

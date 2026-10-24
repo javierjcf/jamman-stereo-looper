@@ -20,7 +20,7 @@ pub mod wav;
 pub(crate) mod xml;
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::device::{SLOTS_PER_STORAGE, Slot};
@@ -329,17 +329,19 @@ impl Card {
     /// `PatchNN`, de modo que un fallo (por ejemplo, tarjeta llena) no deja un
     /// bucle a medias.
     pub fn import_wav(&self, slot: Slot, source: &Path, name: &str) -> Result<Entry> {
-        self.import_wav_from(slot, source, name, source)
+        self.import_wav_from(slot, source, name, source, &mut |_, _| {})
     }
 
     /// Como [`Card::import_wav`], pero la descripción menciona `original`: el
     /// fichero que eligió el usuario antes de convertirlo a `wav`.
+    /// `progress(hechos, total)` informa de los bytes de audio copiados.
     pub fn import_wav_from(
         &self,
         slot: Slot,
         wav: &Path,
         name: &str,
         original: &Path,
+        progress: &mut dyn FnMut(u64, u64),
     ) -> Result<Entry> {
         let source = wav;
         let final_dir = self.patch_dir(slot);
@@ -361,7 +363,7 @@ impl Card {
             fs::create_dir_all(tmp.join(PHRASE_DIR))?;
             input.seek(SeekFrom::Start(0))?;
             let mut out = File::create(tmp.join(PHRASE_DIR).join(AUDIO_FILE))?;
-            io::copy(&mut input, &mut out)?;
+            copy_with_progress(&mut input, &mut out, progress)?;
             out.sync_all()?;
             fs::write(tmp.join(PATCH_FILE), patch.render())?;
             fs::write(tmp.join(PHRASE_DIR).join(PHRASE_FILE), phrase.render())?;
@@ -471,15 +473,103 @@ impl Card {
 
     /// Copia el audio de un bucle a `dest`. No sobrescribe ficheros existentes.
     /// Devuelve los bytes copiados.
-    pub fn export_wav(&self, slot: Slot, dest: &Path) -> Result<u64> {
+    pub fn export_wav(
+        &self,
+        slot: Slot,
+        dest: &Path,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<u64> {
         let source = self.audio_path(slot);
         if !source.is_file() {
             return Err(Error::SlotNotFound(slot.get()));
         }
         let mut input = File::open(source)?;
         let mut out = OpenOptions::new().write(true).create_new(true).open(dest)?;
-        Ok(io::copy(&mut input, &mut out)?)
+        Ok(copy_with_progress(&mut input, &mut out, progress)?)
     }
+
+    /// Copia un bucle completo (audio y ajustes, tal cual) a la posición
+    /// `dest_slot` de otra tarjeta, que debe estar libre. Se construye en una
+    /// carpeta temporal y se renombra al final, como al importar.
+    pub fn backup_loop(
+        &self,
+        slot: Slot,
+        dest: &Card,
+        dest_slot: Slot,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<()> {
+        let source = self.patch_dir(slot);
+        if !source.is_dir() {
+            return Err(Error::SlotNotFound(slot.get()));
+        }
+        let target = dest.patch_dir(dest_slot);
+        if target.exists() {
+            return Err(Error::SlotOccupied(dest_slot.get()));
+        }
+        let tmp = dest
+            .root
+            .join(format!("{TMP_PREFIX}{}", patch_dir_name(dest_slot)));
+        let _ = fs::remove_dir_all(&tmp);
+        let copied =
+            copy_tree(&source, &tmp, progress).and_then(|()| Ok(fs::rename(&tmp, &target)?));
+        if copied.is_err() {
+            let _ = fs::remove_dir_all(&tmp);
+        }
+        copied
+    }
+
+    /// Trae un bucle de otra tarjeta (una copia de seguridad) a la posición
+    /// `slot`, que debe estar libre.
+    pub fn restore_loop(
+        &self,
+        source: &Card,
+        source_slot: Slot,
+        slot: Slot,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<()> {
+        source.backup_loop(source_slot, self, slot, progress)
+    }
+}
+
+/// Copia `input` en `out` por bloques, avisando del progreso.
+fn copy_with_progress(
+    input: &mut File,
+    out: &mut File,
+    progress: &mut dyn FnMut(u64, u64),
+) -> io::Result<u64> {
+    let total = input.metadata()?.len();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut done = 0;
+    loop {
+        let n = input.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])?;
+        done += n as u64;
+        progress(done, total.max(done));
+    }
+    if done == 0 {
+        progress(0, 0);
+    }
+    Ok(done)
+}
+
+/// Copia una carpeta con su contenido (los bucles solo tienen dos niveles).
+fn copy_tree(from: &Path, to: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target, progress)?;
+        } else {
+            let mut out = File::create(&target)?;
+            copy_with_progress(&mut File::open(entry.path())?, &mut out, progress)?;
+            out.sync_all()?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -557,6 +647,7 @@ mod tests {
                 &converted,
                 "Canción",
                 Path::new("/música/Canción.mp3"),
+                &mut |_, _| {},
             )
             .unwrap();
         assert_eq!(e.patch.description, "Imported from Canción.mp3");
@@ -862,12 +953,52 @@ mod tests {
         card.import_wav(slot(1), &src, "x").unwrap();
 
         let dest = dir.path().join("salida.wav");
-        assert_eq!(card.export_wav(slot(1), &dest).unwrap(), audio.len() as u64);
+        let mut last = (0, 0);
+        let copied = card
+            .export_wav(slot(1), &dest, &mut |done, total| last = (done, total))
+            .unwrap();
+        assert_eq!(copied, audio.len() as u64);
+        assert_eq!(last, (copied, copied), "el progreso llega al final");
         assert_eq!(fs::read(&dest).unwrap(), audio);
-        assert!(matches!(card.export_wav(slot(1), &dest), Err(Error::Io(_))));
         assert!(matches!(
-            card.export_wav(slot(2), &dir.path().join("otra.wav")),
+            card.export_wav(slot(1), &dest, &mut |_, _| {}),
+            Err(Error::Io(_))
+        ));
+        assert!(matches!(
+            card.export_wav(slot(2), &dir.path().join("otra.wav"), &mut |_, _| {}),
             Err(Error::SlotNotFound(2))
         ));
+    }
+
+    #[test]
+    fn backup_and_restore_copy_whole_loops_between_cards() {
+        let (dir, card) = new_card();
+        let src = write_source(&dir, "a.wav", &pedal_wav(64));
+        let original = card.import_wav(slot(3), &src, "tres").unwrap();
+        let (_backup_dir, backup) = new_card();
+
+        card.backup_loop(slot(3), &backup, slot(3), &mut |_, _| {})
+            .unwrap();
+        let copy = backup.read(slot(3)).unwrap();
+        assert_eq!(copy.patch.id, original.patch.id, "copia exacta");
+        assert!(matches!(
+            card.backup_loop(slot(3), &backup, slot(3), &mut |_, _| {}),
+            Err(Error::SlotOccupied(3))
+        ));
+        assert!(matches!(
+            card.backup_loop(slot(4), &backup, slot(4), &mut |_, _| {}),
+            Err(Error::SlotNotFound(4))
+        ));
+
+        card.restore_loop(&backup, slot(3), slot(9), &mut |_, _| {})
+            .unwrap();
+        assert_eq!(card.read(slot(9)).unwrap().patch.name, "tres");
+        assert!(
+            !backup
+                .root()
+                .read_dir()
+                .unwrap()
+                .any(|e| { e.unwrap().file_name().to_string_lossy().starts_with(".tmp") })
+        );
     }
 }

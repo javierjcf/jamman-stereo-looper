@@ -12,5 +12,6 @@ pub mod pedal;
 pub mod protocol;
 #[cfg(feature = "serial")]
 pub mod serial;
+pub mod store;
 
 pub use error::{Error, Result};

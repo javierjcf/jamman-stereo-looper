@@ -100,28 +100,26 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         if ui.add_enabled(selected > 0 && !busy, delete).clicked() {
             app.ask_delete_selection();
         }
-        if on_pedal {
-            ui.separator();
-            if ui
-                .add_enabled(!busy, egui::Button::new("💾 Copia de seguridad…"))
-                .on_hover_text(
-                    "Copia todos los bucles del pedal, con sus ajustes, a una carpeta. \
-                     La copia se puede abrir con 📂 como si fuera una tarjeta.",
-                )
-                .clicked()
-            {
-                app.backup(ui.ctx());
-            }
-            if ui
-                .add_enabled(!busy, egui::Button::new("⤴ Restaurar…"))
-                .on_hover_text(
-                    "Sube al pedal los bucles de una copia de seguridad, \
-                     en sus mismas posiciones si están libres",
-                )
-                .clicked()
-            {
-                app.restore(ui.ctx());
-            }
+        ui.separator();
+        if ui
+            .add_enabled(!busy, egui::Button::new("💾 Copia de seguridad…"))
+            .on_hover_text(
+                "Copia todos los bucles, con sus ajustes, a una carpeta del equipo. \
+                 La copia se puede abrir con 📂 como si fuera una tarjeta.",
+            )
+            .clicked()
+        {
+            app.backup(ui.ctx());
+        }
+        if ui
+            .add_enabled(!busy, egui::Button::new("⤴ Restaurar…"))
+            .on_hover_text(
+                "Trae los bucles de una copia de seguridad, \
+                 en sus mismas posiciones si están libres",
+            )
+            .clicked()
+        {
+            app.restore(ui.ctx());
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let hint = if on_pedal {

@@ -136,3 +136,17 @@ duradero**; ninguna funcionalidad sin necesidad real.
   que quedó sin hacer y no se intenta ni limpiar ni volver a listar.
 - Se comprueba el espacio libre (propiedades 10–13) antes de subir, porque el
   pedal acepta escrituras que no caben sin avisar.
+
+## D20. Un único trait para la tarjeta y el pedal (`LoopStore`)
+- La tarjeta y el pedal hacen lo mismo (listar, añadir, exportar, borrar,
+  guardar ajustes, copias de seguridad). Antes la GUI tenía un camino para cada
+  uno y la CLI repetía los comandos. Ahora `Card` y `PedalStore` implementan
+  `LoopStore`, y la CLI (`store_cmd.rs`) y los trabajos de la GUI (`jobs.rs`) se
+  escriben una vez.
+- Lo que solo existe en un sitio se queda en el tipo concreto: mover y
+  renombrar en la tarjeta, la disponibilidad y el espacio del pedal.
+- Un test (`store.rs`) hace el mismo recorrido con los dos, para que no
+  diverjan.
+- Los errores del puerto son `Error::Connection`, distintos de los del disco
+  (`Error::Io`): solo los primeros detienen una tanda.
+

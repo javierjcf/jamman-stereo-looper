@@ -28,6 +28,8 @@ Funciona de dos formas:
 - Lista los bucles con número, nombre, duración, tempo, bucle o una vez, ritmo,
   modo de parada y valoración. Se puede ordenar por columnas y buscar por
   nombre, artista, etiquetas o número.
+- **💾 Copia de seguridad** de toda la tarjeta en una carpeta del equipo y
+  **⤴ Restaurar** (igual que con el pedal).
 
 ### Explorador del equipo, como un cliente SFTP
 - A la izquierda, las carpetas y el audio compatible del ordenador; a la
@@ -134,7 +136,10 @@ jamman card add <tarjeta> cancion.mp3                    # añade en la primera 
 jamman card add <tarjeta> cancion.flac --slot 30 --name "Mi canción" --normalize
 jamman card rename <tarjeta> 30 "Otro nombre"
 jamman card export <tarjeta> 30 copia.wav
+jamman card mv <tarjeta> 30 12                           # mueve (o intercambia si 12 está ocupada)
 jamman card rm <tarjeta> 30                              # pide confirmación (o --yes)
+jamman card backup <tarjeta> <carpeta>                   # copia todos los bucles a una carpeta
+jamman card restore <carpeta> <tarjeta>                  # trae una copia a las posiciones libres
 jamman card init <punto-de-montaje>                      # prepara una tarjeta vacía
 ```
 
@@ -240,15 +245,18 @@ cargo clippy --all-targets     # sin avisos
 
 ```
 crates/
-  jamman-core/   Librería: tarjeta SD, protocolo USB y límites del dispositivo
+  jamman-core/   Librería: tarjeta SD, protocolo USB, pedal y límites del dispositivo
   jamman-audio/  Conversión de audio al formato del pedal y forma de onda
   jamman-cli/    Binario `jamman` (línea de comandos)
   jamman-gui/    Binario `jamman-gui` (interfaz gráfica con egui)
 docs/            Proceso seguido, decisiones, protocolo y formato de la tarjeta
 ```
 
-La lógica de la interfaz (`state.rs`, `browser.rs`, `selection.rs`) no depende
-de egui y tiene tests. `JAMMAN_SCREENSHOT=captura.ppm jamman-gui` guarda una
+La tarjeta (`Card`) y el pedal (`PedalStore`) implementan el mismo trait,
+`LoopStore` (`jamman-core/src/store.rs`): la CLI y los trabajos en segundo plano
+de la GUI se escriben una sola vez para los dos, y un test recorre ambos con
+las mismas comprobaciones. La lógica de la interfaz (`state.rs`, `browser.rs`,
+`selection.rs`, `jobs.rs`) no depende de cómo se dibuja y tiene tests. `JAMMAN_SCREENSHOT=captura.ppm jamman-gui` guarda una
 captura de la ventana (ver `crates/jamman-gui/src/devshot.rs`).
 
 ## Documentación

@@ -1,6 +1,10 @@
-//! Trabajos en segundo plano: importar (y convertir) audio, exportar bucles y
-//! calcular formas de onda, sin bloquear la interfaz. Cada trabajo corre en su propio hilo y
-//! comunica su avance por un canal; tras cada mensaje se pide repintar.
+//! Trabajos en segundo plano sobre la tarjeta o el pedal (importar
+//! convirtiendo, exportar, borrar, guardar, copias de seguridad) y cálculo de
+//! formas de onda, sin bloquear la interfaz. Cada trabajo corre en su propio
+//! hilo y comunica su avance por un canal; tras cada mensaje se pide repintar.
+//!
+//! Todo se escribe una vez sobre [`LoopStore`]: el trabajo no sabe si los
+//! bucles están en una tarjeta del PC o en el pedal.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -10,49 +14,103 @@ use eframe::egui;
 use jamman_audio::{ConvertOptions, convert_to_pedal_wav, needs_conversion};
 use jamman_core::card::{Card, Listing, LoopSettings};
 use jamman_core::device::Slot;
-use jamman_core::pedal::{PedalStore, Storage};
-use jamman_core::protocol::Client;
+use jamman_core::store::LoopStore;
 
-/// Avance de una transferencia (importación o exportación).
+/// Avance de un trabajo.
 #[derive(Debug)]
 pub enum TransferEvent {
-    /// Empieza un fichero (`index` desde 0).
+    /// Empieza un elemento (`index` desde 0).
     Started {
         /// Posición en la lista.
         index: usize,
-        /// Ficheros en total.
+        /// Elementos en total.
         total: usize,
-        /// Nombre del fichero.
+        /// Nombre del elemento.
         file: String,
     },
-    /// Progreso de la conversión del fichero actual (0 a 1).
+    /// Progreso del elemento actual (0 a 1).
     Progress(f32),
-    /// Fichero importado en esa posición.
+    /// Bucle añadido en esa posición.
     Imported(Slot),
-    /// Bucle exportado a esa ruta.
+    /// Bucle exportado (o copiado) a esa ruta.
     Exported(PathBuf),
     /// Bucle borrado.
     Removed(Slot),
     /// Ajustes de un bucle guardados.
     Saved(Slot),
-    /// Lista actualizada del almacén del pedal.
+    /// Lista actualizada del almacén, al terminar.
     Listed(Vec<Listing>),
-    /// Espacio del almacén del pedal, en bytes.
+    /// Espacio del almacén en bytes, si el almacén lo sabe (el pedal).
     Space {
         /// Libres.
         free: u64,
         /// Totales.
         total: u64,
     },
-    /// Fichero que no se pudo importar.
+    /// Elemento que falló.
     Failed {
-        /// Nombre del fichero.
+        /// Nombre del elemento.
         file: String,
         /// Motivo.
         error: String,
     },
-    /// Fin de la transferencia.
+    /// Fin del trabajo.
     Done,
+}
+
+/// Operación sobre un almacén.
+#[derive(Debug, Clone)]
+pub enum Op {
+    /// Solo leer la lista de bucles.
+    List,
+    /// Convertir si hace falta y añadir en las primeras posiciones libres.
+    Import {
+        /// Ficheros de audio.
+        files: Vec<PathBuf>,
+        /// Normalizar el volumen.
+        normalize: bool,
+    },
+    /// Copiar el audio de bucles `(posición, nombre)` a una carpeta.
+    Export {
+        /// Bucles.
+        loops: Vec<(Slot, String)>,
+        /// Carpeta de destino.
+        dir: PathBuf,
+    },
+    /// Borrar bucles.
+    Remove {
+        /// Posiciones.
+        slots: Vec<Slot>,
+    },
+    /// Guardar los ajustes de un bucle.
+    Update {
+        /// Posición.
+        slot: Slot,
+        /// Ajustes nuevos.
+        settings: LoopSettings,
+    },
+    /// Copiar todos los bucles, tal cual, a `dir/JamManStereo`.
+    Backup {
+        /// Carpeta de destino.
+        dir: PathBuf,
+    },
+    /// Traer los bucles de una copia a sus mismas posiciones, si están libres.
+    Restore {
+        /// Carpeta de la copia.
+        dir: PathBuf,
+    },
+}
+
+impl Op {
+    /// Número de elementos, para la barra de progreso.
+    pub fn total(&self) -> usize {
+        match self {
+            Self::Import { files, .. } => files.len(),
+            Self::Export { loops, .. } => loops.len(),
+            Self::Remove { slots } => slots.len(),
+            Self::List | Self::Update { .. } | Self::Backup { .. } | Self::Restore { .. } => 1,
+        }
+    }
 }
 
 /// Envía un evento y pide repintar. Si la ventana se cerró, se ignora.
@@ -61,39 +119,232 @@ fn emit<T>(tx: &Sender<T>, ctx: &egui::Context, event: T) {
     ctx.request_repaint();
 }
 
-/// Importa `files` en las primeras posiciones libres de `card`, convirtiendo
-/// los que no estén ya en el formato del pedal.
-pub fn spawn_import(
-    card: Card,
-    files: Vec<PathBuf>,
-    normalize: bool,
-    ctx: egui::Context,
-) -> Receiver<TransferEvent> {
+/// Ejecuta `op` en un hilo sobre el almacén que devuelve `open` (abrirlo
+/// puede tardar, como conectar con el pedal, así que también se hace en el
+/// hilo). Termina enviando la lista actualizada y el espacio libre. Si se
+/// corta la comunicación, para ahí (ver [`run_steps`]). `label` nombra el
+/// almacén en los errores de apertura y lectura.
+pub fn spawn<S, O>(label: String, open: O, op: Op, ctx: egui::Context) -> Receiver<TransferEvent>
+where
+    S: LoopStore,
+    O: FnOnce() -> jamman_core::Result<S> + Send + 'static,
+{
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let total = files.len();
-        for (index, path) in files.into_iter().enumerate() {
-            let file = path.file_name().map_or_else(
-                || path.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
+        let fail = |error: jamman_core::Error| {
+            let file = label.clone();
             emit(
                 &tx,
                 &ctx,
-                TransferEvent::Started {
-                    index,
-                    total,
-                    file: file.clone(),
+                TransferEvent::Failed {
+                    file,
+                    error: error.to_string(),
                 },
             );
-            match import_one(&card, &path, normalize, &tx, &ctx) {
-                Ok(slot) => emit(&tx, &ctx, TransferEvent::Imported(slot)),
-                Err(error) => emit(&tx, &ctx, TransferEvent::Failed { file, error }),
+        };
+        match open() {
+            Ok(mut store) => {
+                if run_op(&mut store, op, &tx, &ctx).is_ok() {
+                    match store.list() {
+                        Ok(listing) => emit(&tx, &ctx, TransferEvent::Listed(listing)),
+                        Err(e) => fail(e),
+                    }
+                    if let Ok(Some((free, total))) = store.space() {
+                        emit(&tx, &ctx, TransferEvent::Space { free, total });
+                    }
+                }
             }
+            Err(e) => fail(e),
         }
         emit(&tx, &ctx, TransferEvent::Done);
     });
     rx
+}
+
+/// Se cortó la comunicación con el almacén y no se sigue.
+struct ConnectionLost;
+
+/// Error de un paso: del almacén o del propio equipo (p. ej. al convertir).
+enum StepError {
+    Store(jamman_core::Error),
+    Local(String),
+}
+
+impl From<jamman_core::Error> for StepError {
+    fn from(e: jamman_core::Error) -> Self {
+        Self::Store(e)
+    }
+}
+
+/// Ejecuta los pasos de una operación por lotes. Cada error se anota; si
+/// corta la comunicación (p. ej. el pedal deja de responder), los elementos
+/// que faltan se anotan como no intentados y se para: seguir enviando
+/// peticiones a un pedal colgado solo acumula esperas y errores.
+fn run_steps<I>(
+    items: Vec<(String, I)>,
+    tx: &Sender<TransferEvent>,
+    ctx: &egui::Context,
+    mut step: impl FnMut(I) -> Result<TransferEvent, StepError>,
+) -> Result<(), ConnectionLost> {
+    let total = items.len();
+    let mut items = items.into_iter().enumerate();
+    while let Some((index, (file, item))) = items.next() {
+        let started = TransferEvent::Started {
+            index,
+            total,
+            file: file.clone(),
+        };
+        emit(tx, ctx, started);
+        let (error, lost) = match step(item) {
+            Ok(event) => {
+                emit(tx, ctx, event);
+                continue;
+            }
+            Err(StepError::Local(error)) => (error, false),
+            Err(StepError::Store(e)) => (e.to_string(), e.breaks_connection()),
+        };
+        emit(tx, ctx, TransferEvent::Failed { file, error });
+        if lost {
+            for (_, (file, _)) in items {
+                let error = "no se ha intentado: se cortó la comunicación".to_owned();
+                emit(tx, ctx, TransferEvent::Failed { file, error });
+            }
+            return Err(ConnectionLost);
+        }
+    }
+    Ok(())
+}
+
+/// Nombre de un bucle en la lista de progreso.
+fn loop_label(slot: Slot) -> String {
+    format!("Bucle {:02}", slot.get())
+}
+
+/// Hace la operación. Devuelve `Err` si se cortó la comunicación.
+fn run_op(
+    store: &mut dyn LoopStore,
+    op: Op,
+    tx: &Sender<TransferEvent>,
+    ctx: &egui::Context,
+) -> Result<(), ConnectionLost> {
+    // Progreso en bytes llevado al tramo [from, to] de la barra.
+    let bytes_progress = |from: f32, to: f32| {
+        let mut send = progress_sender(tx, ctx, from, to);
+        move |done: u64, total: u64| {
+            send(if total == 0 {
+                1.0
+            } else {
+                done as f32 / total as f32
+            })
+        }
+    };
+    match op {
+        Op::List => Ok(()),
+        Op::Import { files, normalize } => {
+            let items = files.into_iter().map(|p| (display_name(&p), p)).collect();
+            run_steps(items, tx, ctx, |path| {
+                let slot = store.first_free_slot()?.ok_or_else(|| {
+                    StepError::Local("no quedan posiciones libres (99 bucles)".into())
+                })?;
+                let workdir = tempfile::tempdir().map_err(|e| StepError::Local(e.to_string()))?;
+                let wav = prepare_wav(
+                    &path,
+                    normalize,
+                    workdir.path(),
+                    &mut progress_sender(tx, ctx, 0.0, 0.3),
+                )
+                .map_err(StepError::Local)?;
+                let entry = store.import_wav_from(
+                    slot,
+                    &wav,
+                    &loop_name(&path),
+                    &path,
+                    &mut bytes_progress(0.3, 1.0),
+                )?;
+                Ok(TransferEvent::Imported(entry.slot))
+            })
+        }
+        Op::Export { loops, dir } => {
+            let items = loops
+                .into_iter()
+                .map(|(slot, name)| (export_file_name(slot, &name), slot))
+                .map(|(file, slot)| (file.clone(), (file, slot)))
+                .collect();
+            run_steps(items, tx, ctx, |(file, slot)| {
+                let dest = unique_path(&dir, &file);
+                store.export_wav(slot, &dest, &mut bytes_progress(0.0, 1.0))?;
+                Ok(TransferEvent::Exported(dest))
+            })
+        }
+        Op::Remove { slots } => {
+            let items = slots.into_iter().map(|s| (loop_label(s), s)).collect();
+            run_steps(items, tx, ctx, |slot| {
+                store.remove(slot)?;
+                Ok(TransferEvent::Removed(slot))
+            })
+        }
+        Op::Update { slot, settings } => {
+            run_steps(vec![(loop_label(slot), slot)], tx, ctx, |slot| {
+                store.update(slot, &settings)?;
+                Ok(TransferEvent::Saved(slot))
+            })
+        }
+        Op::Backup { dir } => {
+            let prepared = Card::create(&dir).and_then(|card| Ok((store.slots()?, card)));
+            let (slots, card) = match prepared {
+                Ok(v) => v,
+                Err(e) => return setup_failed(&dir, e, tx, ctx),
+            };
+            let items = slots.into_iter().map(|s| (loop_label(s), s)).collect();
+            run_steps(items, tx, ctx, |slot| {
+                store.backup_loop(slot, &card, slot, &mut bytes_progress(0.0, 1.0))?;
+                Ok(TransferEvent::Exported(
+                    card.root().join(format!("Patch{:02}", slot.get())),
+                ))
+            })
+        }
+        Op::Restore { dir } => {
+            let opened = Card::open(&dir).and_then(|card| Ok((card.list()?, card)));
+            let (listing, card) = match opened {
+                Ok(v) => v,
+                Err(e) => return setup_failed(&dir, e, tx, ctx),
+            };
+            let items = listing
+                .into_iter()
+                .map(|l| (loop_label(l.slot), l))
+                .collect();
+            run_steps(items, tx, ctx, |l| {
+                l.entry.map_err(|e| StepError::Local(e.to_string()))?;
+                store.restore_loop(&card, l.slot, l.slot, &mut bytes_progress(0.0, 1.0))?;
+                Ok(TransferEvent::Imported(l.slot))
+            })
+        }
+    }
+}
+
+/// Anota que no se pudo preparar una operación (abrir la carpeta de la copia
+/// o leer las posiciones).
+fn setup_failed(
+    dir: &Path,
+    error: jamman_core::Error,
+    tx: &Sender<TransferEvent>,
+    ctx: &egui::Context,
+) -> Result<(), ConnectionLost> {
+    let lost = error.breaks_connection();
+    let failed = TransferEvent::Failed {
+        file: dir.display().to_string(),
+        error: error.to_string(),
+    };
+    emit(tx, ctx, failed);
+    if lost { Err(ConnectionLost) } else { Ok(()) }
+}
+
+/// Nombre del fichero para mostrar.
+fn display_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// Nombre del bucle a partir del fichero elegido.
@@ -138,28 +389,6 @@ fn progress_sender<'a>(
     }
 }
 
-fn import_one(
-    card: &Card,
-    path: &Path,
-    normalize: bool,
-    tx: &Sender<TransferEvent>,
-    ctx: &egui::Context,
-) -> Result<Slot, String> {
-    let slot = card
-        .first_free_slot()
-        .ok_or("la tarjeta está llena (99 bucles)")?;
-    let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let wav = prepare_wav(
-        path,
-        normalize,
-        workdir.path(),
-        &mut progress_sender(tx, ctx, 0.0, 1.0),
-    )?;
-    card.import_wav_from(slot, &wav, &loop_name(path), path)
-        .map(|e| e.slot)
-        .map_err(|e| e.to_string())
-}
-
 /// Nombre de fichero para exportar un bucle: `NN Nombre.wav`, sin los
 /// caracteres que no admiten Windows o Linux.
 pub fn export_file_name(slot: Slot, name: &str) -> String {
@@ -196,378 +425,6 @@ pub fn unique_path(dir: &Path, file: &str) -> PathBuf {
         })
         .find(|p| !p.exists())
         .unwrap_or(first)
-}
-
-/// Exporta el audio de varios bucles `(posición, nombre)` a `dir`.
-pub fn spawn_export(
-    card: Card,
-    loops: Vec<(Slot, String)>,
-    dir: PathBuf,
-    ctx: egui::Context,
-) -> Receiver<TransferEvent> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let total = loops.len();
-        for (index, (slot, name)) in loops.into_iter().enumerate() {
-            let file = export_file_name(slot, &name);
-            emit(
-                &tx,
-                &ctx,
-                TransferEvent::Started {
-                    index,
-                    total,
-                    file: file.clone(),
-                },
-            );
-            let dest = unique_path(&dir, &file);
-            match card.export_wav(slot, &dest) {
-                Ok(_) => {
-                    emit(&tx, &ctx, TransferEvent::Progress(1.0));
-                    emit(&tx, &ctx, TransferEvent::Exported(dest));
-                }
-                Err(e) => emit(
-                    &tx,
-                    &ctx,
-                    TransferEvent::Failed {
-                        file,
-                        error: e.to_string(),
-                    },
-                ),
-            }
-        }
-        emit(&tx, &ctx, TransferEvent::Done);
-    });
-    rx
-}
-
-/// Operación sobre un almacén del pedal.
-#[derive(Debug, Clone)]
-pub enum PedalOp {
-    /// Solo leer la lista de bucles.
-    List,
-    /// Convertir si hace falta y subir a las primeras posiciones libres.
-    Import {
-        /// Ficheros de audio.
-        files: Vec<PathBuf>,
-        /// Normalizar el volumen.
-        normalize: bool,
-    },
-    /// Descargar el audio de bucles `(posición, nombre)` a una carpeta.
-    Export {
-        /// Bucles.
-        loops: Vec<(Slot, String)>,
-        /// Carpeta de destino.
-        dir: PathBuf,
-    },
-    /// Borrar bucles.
-    Remove {
-        /// Posiciones.
-        slots: Vec<Slot>,
-    },
-    /// Guardar los ajustes de un bucle.
-    Update {
-        /// Posición.
-        slot: Slot,
-        /// Ajustes nuevos.
-        settings: LoopSettings,
-    },
-    /// Copiar todos los bucles, tal cual, a `dir/JamManStereo`.
-    Backup {
-        /// Carpeta de destino.
-        dir: PathBuf,
-    },
-    /// Subir los bucles de una copia a las mismas posiciones, si están libres.
-    Restore {
-        /// Carpeta de la copia.
-        dir: PathBuf,
-    },
-}
-
-/// Número de elementos de una operación, para la barra de progreso.
-pub fn pedal_op_total(op: &PedalOp) -> usize {
-    match op {
-        PedalOp::List
-        | PedalOp::Update { .. }
-        | PedalOp::Backup { .. }
-        | PedalOp::Restore { .. } => 1,
-        PedalOp::Import { files, .. } => files.len(),
-        PedalOp::Export { loops, .. } => loops.len(),
-        PedalOp::Remove { slots } => slots.len(),
-    }
-}
-
-/// Ejecuta `op` sobre `storage` en un hilo: conecta con `connect`, hace la
-/// operación y termina enviando la lista actualizada del almacén y su espacio
-/// libre. Si el pedal deja de responder, para en ese punto (ver
-/// [`run_pedal_op`]).
-pub fn spawn_pedal<T, C>(
-    storage: Storage,
-    op: PedalOp,
-    connect: C,
-    ctx: egui::Context,
-) -> Receiver<TransferEvent>
-where
-    T: std::io::Read + std::io::Write + 'static,
-    C: FnOnce() -> jamman_core::Result<Client<T>> + Send + 'static,
-{
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let fail = |file: &str, error: String| {
-            emit(
-                &tx,
-                &ctx,
-                TransferEvent::Failed {
-                    file: file.to_owned(),
-                    error,
-                },
-            );
-        };
-        let mut store = match connect() {
-            Ok(client) => PedalStore::new(client, storage),
-            Err(e) => {
-                fail("Pedal", e.to_string());
-                emit(&tx, &ctx, TransferEvent::Done);
-                return;
-            }
-        };
-        match store.available() {
-            Ok(true) => {
-                if run_pedal_op(&mut store, op, &tx, &ctx).is_ok() {
-                    match store.list() {
-                        Ok(listing) => emit(&tx, &ctx, TransferEvent::Listed(listing)),
-                        Err(e) => fail(storage.label(), e.to_string()),
-                    }
-                    if let Ok((free, total)) = store.space() {
-                        emit(&tx, &ctx, TransferEvent::Space { free, total });
-                    }
-                }
-            }
-            Ok(false) => fail(
-                storage.label(),
-                "no disponible: ¿está la tarjeta metida en el pedal?".to_owned(),
-            ),
-            Err(e) => fail(storage.label(), e.to_string()),
-        }
-        emit(&tx, &ctx, TransferEvent::Done);
-    });
-    rx
-}
-
-/// La conversación con el pedal se ha cortado y no se sigue.
-struct ConnectionLost;
-
-/// Error de un paso de una operación: del pedal o del propio equipo.
-enum StepError {
-    Pedal(jamman_core::Error),
-    Local(String),
-}
-
-impl From<jamman_core::Error> for StepError {
-    fn from(e: jamman_core::Error) -> Self {
-        Self::Pedal(e)
-    }
-}
-
-/// Ejecuta los pasos de una operación por lotes. Cada error se anota; si
-/// rompe la conversación con el pedal (p. ej. deja de responder), los
-/// elementos que faltan se anotan como no intentados y se para: seguir
-/// enviando peticiones a un pedal colgado solo acumula esperas y errores.
-fn run_steps<I>(
-    items: Vec<(String, I)>,
-    tx: &Sender<TransferEvent>,
-    ctx: &egui::Context,
-    mut step: impl FnMut(I) -> Result<TransferEvent, StepError>,
-) -> Result<(), ConnectionLost> {
-    let total = items.len();
-    let mut items = items.into_iter().enumerate();
-    while let Some((index, (file, item))) = items.next() {
-        emit(
-            tx,
-            ctx,
-            TransferEvent::Started {
-                index,
-                total,
-                file: file.clone(),
-            },
-        );
-        let error = match step(item) {
-            Ok(event) => {
-                emit(tx, ctx, event);
-                continue;
-            }
-            Err(StepError::Local(error)) => error,
-            Err(StepError::Pedal(e)) if e.breaks_connection() => {
-                emit(
-                    tx,
-                    ctx,
-                    TransferEvent::Failed {
-                        file,
-                        error: e.to_string(),
-                    },
-                );
-                for (_, (file, _)) in items {
-                    let error = "no se ha intentado: el pedal dejó de responder".to_owned();
-                    emit(tx, ctx, TransferEvent::Failed { file, error });
-                }
-                return Err(ConnectionLost);
-            }
-            Err(StepError::Pedal(e)) => e.to_string(),
-        };
-        emit(tx, ctx, TransferEvent::Failed { file, error });
-    }
-    Ok(())
-}
-
-/// Hace la operación. Devuelve `Err` si el pedal dejó de responder.
-fn run_pedal_op<T: std::io::Read + std::io::Write>(
-    store: &mut PedalStore<T>,
-    op: PedalOp,
-    tx: &Sender<TransferEvent>,
-    ctx: &egui::Context,
-) -> Result<(), ConnectionLost> {
-    // Progreso de bytes del USB llevado al tramo [from, to] de la barra.
-    let bytes_progress = |from: f32, to: f32| {
-        let mut send = progress_sender(tx, ctx, from, to);
-        move |done: u64, total: u64| {
-            send(if total == 0 {
-                1.0
-            } else {
-                done as f32 / total as f32
-            })
-        }
-    };
-    let loop_label = |slot: Slot| format!("Bucle {:02}", slot.get());
-    match op {
-        PedalOp::List => Ok(()),
-        PedalOp::Import { files, normalize } => {
-            let items = files
-                .into_iter()
-                .map(|path| {
-                    let file = path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |n| n.to_string_lossy().into_owned(),
-                    );
-                    (file, path)
-                })
-                .collect();
-            run_steps(items, tx, ctx, |path| {
-                let slot = store
-                    .first_free_slot()?
-                    .ok_or_else(|| StepError::Local("no queda ninguna posición libre".into()))?;
-                let workdir = tempfile::tempdir().map_err(|e| StepError::Local(e.to_string()))?;
-                let wav = prepare_wav(
-                    &path,
-                    normalize,
-                    workdir.path(),
-                    &mut progress_sender(tx, ctx, 0.0, 0.3),
-                )
-                .map_err(StepError::Local)?;
-                let entry = store.import_wav_from(
-                    slot,
-                    &wav,
-                    &loop_name(&path),
-                    &path,
-                    &mut bytes_progress(0.3, 1.0),
-                )?;
-                Ok(TransferEvent::Imported(entry.slot))
-            })
-        }
-        PedalOp::Export { loops, dir } => {
-            let items = loops
-                .into_iter()
-                .map(|(slot, name)| (export_file_name(slot, &name), slot))
-                .collect::<Vec<_>>();
-            let items = items
-                .into_iter()
-                .map(|(file, slot)| (file.clone(), (file, slot)))
-                .collect();
-            run_steps(items, tx, ctx, |(file, slot)| {
-                let dest = unique_path(&dir, &file);
-                store.export_wav(slot, &dest, &mut bytes_progress(0.0, 1.0))?;
-                Ok(TransferEvent::Exported(dest))
-            })
-        }
-        PedalOp::Remove { slots } => {
-            let items = slots.into_iter().map(|s| (loop_label(s), s)).collect();
-            run_steps(items, tx, ctx, |slot| {
-                store.remove(slot)?;
-                Ok(TransferEvent::Removed(slot))
-            })
-        }
-        PedalOp::Update { slot, settings } => {
-            run_steps(vec![(loop_label(slot), slot)], tx, ctx, |slot| {
-                store.update(slot, &settings)?;
-                Ok(TransferEvent::Saved(slot))
-            })
-        }
-        PedalOp::Backup { dir } => {
-            let card = Card::create(&dir);
-            let slots = store.slots();
-            let (card, slots) = match (card, slots) {
-                (Ok(card), Ok(slots)) => (card, slots),
-                (Err(e), _) => {
-                    let error = e.to_string();
-                    emit(
-                        tx,
-                        ctx,
-                        TransferEvent::Failed {
-                            file: dir.display().to_string(),
-                            error,
-                        },
-                    );
-                    return Ok(());
-                }
-                (_, Err(e)) => {
-                    let lost = e.breaks_connection();
-                    emit(
-                        tx,
-                        ctx,
-                        TransferEvent::Failed {
-                            file: "Pedal".into(),
-                            error: e.to_string(),
-                        },
-                    );
-                    return if lost { Err(ConnectionLost) } else { Ok(()) };
-                }
-            };
-            let items = slots.into_iter().map(|s| (loop_label(s), s)).collect();
-            run_steps(items, tx, ctx, |slot| {
-                store.backup_loop(slot, &card, slot, &mut bytes_progress(0.0, 1.0))?;
-                Ok(TransferEvent::Exported(
-                    card.root().join(format!("Patch{:02}", slot.get())),
-                ))
-            })
-        }
-        PedalOp::Restore { dir } => {
-            let opened = Card::open(&dir).and_then(|card| Ok((card.list()?, card)));
-            let (listing, card) = match opened {
-                Ok(v) => v,
-                Err(e) => {
-                    let error = e.to_string();
-                    emit(
-                        tx,
-                        ctx,
-                        TransferEvent::Failed {
-                            file: dir.display().to_string(),
-                            error,
-                        },
-                    );
-                    return Ok(());
-                }
-            };
-            let items = listing
-                .into_iter()
-                .map(|l| (loop_label(l.slot), l))
-                .collect();
-            run_steps(items, tx, ctx, |l| {
-                if let Err(e) = l.entry {
-                    return Err(StepError::Local(e.to_string()));
-                }
-                store.restore_loop(&card, l.slot, l.slot, &mut bytes_progress(0.0, 1.0))?;
-                Ok(TransferEvent::Imported(l.slot))
-            })
-        }
-    }
 }
 
 /// Resultado del cálculo de una forma de onda.
@@ -637,12 +494,13 @@ mod tests {
         let card = Card::create(&dir.path().join("sd")).unwrap();
         let mp3 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../jamman-audio/tests/fixtures/tono-mono-22k.mp3");
-        collect(&spawn_import(
-            card.clone(),
-            vec![mp3.clone(), mp3],
-            false,
-            egui::Context::default(),
-        ));
+        run_card(
+            &card,
+            Op::Import {
+                files: vec![mp3.clone(), mp3],
+                normalize: false,
+            },
+        );
         let out = dir.path().join("salida");
         std::fs::create_dir(&out).unwrap();
         std::fs::write(out.join("01 Uno.wav"), b"ya estaba").unwrap();
@@ -652,12 +510,13 @@ mod tests {
             (Slot::new(2).unwrap(), "Dos".to_owned()),
             (Slot::new(9).unwrap(), "No existe".to_owned()),
         ];
-        let events = collect(&spawn_export(
-            card.clone(),
-            loops,
-            out.clone(),
-            egui::Context::default(),
-        ));
+        let events = run_card(
+            &card,
+            Op::Export {
+                loops,
+                dir: out.clone(),
+            },
+        );
 
         let exported: Vec<_> = events
             .iter()
@@ -681,6 +540,8 @@ mod tests {
 
     mod pedal {
         use super::*;
+        use jamman_core::pedal::{PedalStore, Storage};
+        use jamman_core::protocol::Client;
         use jamman_core::protocol::fake::FakePedal;
 
         fn mp3() -> PathBuf {
@@ -689,11 +550,20 @@ mod tests {
         }
 
         /// Ejecuta `op` contra `fake` y devuelve los eventos.
-        fn run(fake: FakePedal, storage: Storage, op: PedalOp) -> Vec<TransferEvent> {
-            collect(&spawn_pedal(
-                storage,
+        fn run(fake: FakePedal, storage: Storage, op: Op) -> Vec<TransferEvent> {
+            run_on(storage, fake, op)
+        }
+
+        /// Como [`run`], con cualquier transporte.
+        fn run_on<T: std::io::Read + std::io::Write + Send + 'static>(
+            storage: Storage,
+            io: T,
+            op: Op,
+        ) -> Vec<TransferEvent> {
+            collect(&spawn(
+                storage.label().to_owned(),
+                move || PedalStore::open(Client::new(io), storage),
                 op,
-                move || Ok(Client::new(fake)),
                 egui::Context::default(),
             ))
         }
@@ -752,15 +622,14 @@ mod tests {
                 pedal: FakePedal::new(),
                 requests: 12,
             };
-            let events = collect(&spawn_pedal(
+            let events = run_on(
                 Storage::Card,
-                PedalOp::Import {
+                pedal,
+                Op::Import {
                     files: vec![mp3(), mp3(), mp3()],
                     normalize: false,
                 },
-                move || Ok(Client::new(pedal)),
-                egui::Context::default(),
-            ));
+            );
             let failures: Vec<&str> = events
                 .iter()
                 .filter_map(|e| match e {
@@ -789,7 +658,7 @@ mod tests {
 
         #[test]
         fn listing_reports_the_free_space_of_the_storage() {
-            let events = run(FakePedal::new(), Storage::Card, PedalOp::List);
+            let events = run(FakePedal::new(), Storage::Card, Op::List);
             assert!(events.iter().any(|e| matches!(
                 e,
                 TransferEvent::Space { free, total }
@@ -802,7 +671,7 @@ mod tests {
             let events = run(
                 FakePedal::new(),
                 Storage::Internal,
-                PedalOp::Import {
+                Op::Import {
                     files: vec![mp3()],
                     normalize: false,
                 },
@@ -827,7 +696,7 @@ mod tests {
             let events = run(
                 fake_with_loop(),
                 Storage::Card,
-                PedalOp::Export {
+                Op::Export {
                     loops: vec![(four, "Cuatro".into())],
                     dir: dir.path().to_path_buf(),
                 },
@@ -842,7 +711,7 @@ mod tests {
             let events = run(
                 fake_with_loop(),
                 Storage::Card,
-                PedalOp::Remove { slots: vec![four] },
+                Op::Remove { slots: vec![four] },
             );
             assert!(
                 events
@@ -859,7 +728,7 @@ mod tests {
             let events = run(
                 fake_with_loop(),
                 Storage::Card,
-                PedalOp::Update {
+                Op::Update {
                     slot: four,
                     settings,
                 },
@@ -885,7 +754,7 @@ mod tests {
             let events = run(
                 fake_with_loop(),
                 Storage::Card,
-                PedalOp::Backup {
+                Op::Backup {
                     dir: dir.path().to_path_buf(),
                 },
             );
@@ -903,7 +772,7 @@ mod tests {
             let events = run(
                 FakePedal::new(),
                 Storage::Internal,
-                PedalOp::Restore {
+                Op::Restore {
                     dir: dir.path().to_path_buf(),
                 },
             );
@@ -919,16 +788,16 @@ mod tests {
         fn a_missing_card_or_pedal_is_reported() {
             let mut no_card = FakePedal::new();
             no_card.dirs.remove(Storage::Card.root());
-            let events = run(no_card, Storage::Card, PedalOp::List);
+            let events = run(no_card, Storage::Card, Op::List);
             assert!(events.iter().any(
                 |e| matches!(e, TransferEvent::Failed { error, .. } if error.contains("tarjeta"))
             ));
             assert!(matches!(events.last(), Some(TransferEvent::Done)));
 
-            let rx = spawn_pedal::<FakePedal, _>(
-                Storage::Card,
-                PedalOp::List,
+            let rx = spawn::<PedalStore<FakePedal>, _>(
+                "Pedal".into(),
                 || Err(jamman_core::Error::PedalNotFound),
+                Op::List,
                 egui::Context::default(),
             );
             let events = collect(&rx);
@@ -938,6 +807,17 @@ mod tests {
                     .any(|e| matches!(e, TransferEvent::Failed { file, .. } if file == "Pedal"))
             );
         }
+    }
+
+    /// Ejecuta `op` sobre una tarjeta y devuelve los eventos.
+    fn run_card(card: &Card, op: Op) -> Vec<TransferEvent> {
+        let card = card.clone();
+        collect(&spawn(
+            "Tarjeta".into(),
+            move || Ok(card),
+            op,
+            egui::Context::default(),
+        ))
     }
 
     fn collect(rx: &Receiver<TransferEvent>) -> Vec<TransferEvent> {
@@ -963,13 +843,13 @@ mod tests {
         let junk = dir.path().join("roto.mp3");
         std::fs::write(&junk, b"no es audio").unwrap();
 
-        let rx = spawn_import(
-            card.clone(),
-            vec![mp3, junk],
-            false,
-            egui::Context::default(),
+        let events = run_card(
+            &card,
+            Op::Import {
+                files: vec![mp3, junk],
+                normalize: false,
+            },
         );
-        let events = collect(&rx);
 
         let imported: Vec<_> = events
             .iter()
@@ -1005,16 +885,15 @@ mod tests {
         }
         let mp3 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../jamman-audio/tests/fixtures/tono-mono-22k.mp3");
-        let events = collect(&spawn_import(
-            card,
-            vec![mp3],
-            false,
-            egui::Context::default(),
-        ));
-        assert!(
-            events.iter().any(
-                |e| matches!(e, TransferEvent::Failed { error, .. } if error.contains("llena"))
-            )
+        let events = run_card(
+            &card,
+            Op::Import {
+                files: vec![mp3],
+                normalize: false,
+            },
         );
+        assert!(events.iter().any(
+            |e| matches!(e, TransferEvent::Failed { error, .. } if error.contains("posiciones libres"))
+        ));
     }
 }

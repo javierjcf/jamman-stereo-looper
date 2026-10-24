@@ -225,7 +225,8 @@ mod tests {
     #[test]
     fn who_am_i_has_empty_payload() {
         let frame = Request::WhoAmI.encode(7).unwrap();
-        assert_eq!(frame, [0, 0, 0, 0, 0, 0, 7, 0, 0, 0]);
+        // La longitud (4) cuenta solo la serie: la carga está vacía.
+        assert_eq!(frame, [0, 0, 4, 0, 0, 0, 7, 0, 0, 0]);
     }
 
     #[test]

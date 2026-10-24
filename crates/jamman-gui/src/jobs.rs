@@ -37,6 +37,13 @@ pub enum TransferEvent {
     Saved(Slot),
     /// Lista actualizada del almacén del pedal.
     Listed(Vec<Listing>),
+    /// Espacio del almacén del pedal, en bytes.
+    Space {
+        /// Libres.
+        free: u64,
+        /// Totales.
+        total: u64,
+    },
     /// Fichero que no se pudo importar.
     Failed {
         /// Nombre del fichero.
@@ -290,7 +297,9 @@ pub fn pedal_op_total(op: &PedalOp) -> usize {
 }
 
 /// Ejecuta `op` sobre `storage` en un hilo: conecta con `connect`, hace la
-/// operación y termina enviando siempre la lista actualizada del almacén.
+/// operación y termina enviando la lista actualizada del almacén y su espacio
+/// libre. Si el pedal deja de responder, para en ese punto (ver
+/// [`run_pedal_op`]).
 pub fn spawn_pedal<T, C>(
     storage: Storage,
     op: PedalOp,
@@ -323,10 +332,14 @@ where
         };
         match store.available() {
             Ok(true) => {
-                run_pedal_op(&mut store, op, &tx, &ctx);
-                match store.list() {
-                    Ok(listing) => emit(&tx, &ctx, TransferEvent::Listed(listing)),
-                    Err(e) => fail(storage.label(), e.to_string()),
+                if run_pedal_op(&mut store, op, &tx, &ctx).is_ok() {
+                    match store.list() {
+                        Ok(listing) => emit(&tx, &ctx, TransferEvent::Listed(listing)),
+                        Err(e) => fail(storage.label(), e.to_string()),
+                    }
+                    if let Ok((free, total)) = store.space() {
+                        emit(&tx, &ctx, TransferEvent::Space { free, total });
+                    }
                 }
             }
             Ok(false) => fail(
@@ -340,16 +353,78 @@ where
     rx
 }
 
+/// La conversación con el pedal se ha cortado y no se sigue.
+struct ConnectionLost;
+
+/// Error de un paso de una operación: del pedal o del propio equipo.
+enum StepError {
+    Pedal(jamman_core::Error),
+    Local(String),
+}
+
+impl From<jamman_core::Error> for StepError {
+    fn from(e: jamman_core::Error) -> Self {
+        Self::Pedal(e)
+    }
+}
+
+/// Ejecuta los pasos de una operación por lotes. Cada error se anota; si
+/// rompe la conversación con el pedal (p. ej. deja de responder), los
+/// elementos que faltan se anotan como no intentados y se para: seguir
+/// enviando peticiones a un pedal colgado solo acumula esperas y errores.
+fn run_steps<I>(
+    items: Vec<(String, I)>,
+    tx: &Sender<TransferEvent>,
+    ctx: &egui::Context,
+    mut step: impl FnMut(I) -> Result<TransferEvent, StepError>,
+) -> Result<(), ConnectionLost> {
+    let total = items.len();
+    let mut items = items.into_iter().enumerate();
+    while let Some((index, (file, item))) = items.next() {
+        emit(
+            tx,
+            ctx,
+            TransferEvent::Started {
+                index,
+                total,
+                file: file.clone(),
+            },
+        );
+        let error = match step(item) {
+            Ok(event) => {
+                emit(tx, ctx, event);
+                continue;
+            }
+            Err(StepError::Local(error)) => error,
+            Err(StepError::Pedal(e)) if e.breaks_connection() => {
+                emit(
+                    tx,
+                    ctx,
+                    TransferEvent::Failed {
+                        file,
+                        error: e.to_string(),
+                    },
+                );
+                for (_, (file, _)) in items {
+                    let error = "no se ha intentado: el pedal dejó de responder".to_owned();
+                    emit(tx, ctx, TransferEvent::Failed { file, error });
+                }
+                return Err(ConnectionLost);
+            }
+            Err(StepError::Pedal(e)) => e.to_string(),
+        };
+        emit(tx, ctx, TransferEvent::Failed { file, error });
+    }
+    Ok(())
+}
+
+/// Hace la operación. Devuelve `Err` si el pedal dejó de responder.
 fn run_pedal_op<T: std::io::Read + std::io::Write>(
     store: &mut PedalStore<T>,
     op: PedalOp,
     tx: &Sender<TransferEvent>,
     ctx: &egui::Context,
-) {
-    let started = |index: usize, total: usize, file: String| {
-        emit(tx, ctx, TransferEvent::Started { index, total, file });
-    };
-    let fail = |file: String, error: String| emit(tx, ctx, TransferEvent::Failed { file, error });
+) -> Result<(), ConnectionLost> {
     // Progreso de bytes del USB llevado al tramo [from, to] de la barra.
     let bytes_progress = |from: f32, to: f32| {
         let mut send = progress_sender(tx, ctx, from, to);
@@ -361,122 +436,136 @@ fn run_pedal_op<T: std::io::Read + std::io::Write>(
             })
         }
     };
+    let loop_label = |slot: Slot| format!("Bucle {:02}", slot.get());
     match op {
-        PedalOp::List => {}
+        PedalOp::List => Ok(()),
         PedalOp::Import { files, normalize } => {
-            let total = files.len();
-            for (index, path) in files.into_iter().enumerate() {
-                let file = path.file_name().map_or_else(
-                    || path.display().to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                );
-                started(index, total, file.clone());
-                let result = (|| -> Result<Slot, String> {
-                    let slot = store
-                        .first_free_slot()
-                        .map_err(|e| e.to_string())?
-                        .ok_or("no queda ninguna posición libre")?;
-                    let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
-                    let wav = prepare_wav(
-                        &path,
-                        normalize,
-                        workdir.path(),
-                        &mut progress_sender(tx, ctx, 0.0, 0.3),
-                    )?;
-                    store
-                        .import_wav_from(
-                            slot,
-                            &wav,
-                            &loop_name(&path),
-                            &path,
-                            &mut bytes_progress(0.3, 1.0),
-                        )
-                        .map(|e| e.slot)
-                        .map_err(|e| e.to_string())
-                })();
-                match result {
-                    Ok(slot) => emit(tx, ctx, TransferEvent::Imported(slot)),
-                    Err(e) => fail(file, e),
-                }
-            }
+            let items = files
+                .into_iter()
+                .map(|path| {
+                    let file = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    (file, path)
+                })
+                .collect();
+            run_steps(items, tx, ctx, |path| {
+                let slot = store
+                    .first_free_slot()?
+                    .ok_or_else(|| StepError::Local("no queda ninguna posición libre".into()))?;
+                let workdir = tempfile::tempdir().map_err(|e| StepError::Local(e.to_string()))?;
+                let wav = prepare_wav(
+                    &path,
+                    normalize,
+                    workdir.path(),
+                    &mut progress_sender(tx, ctx, 0.0, 0.3),
+                )
+                .map_err(StepError::Local)?;
+                let entry = store.import_wav_from(
+                    slot,
+                    &wav,
+                    &loop_name(&path),
+                    &path,
+                    &mut bytes_progress(0.3, 1.0),
+                )?;
+                Ok(TransferEvent::Imported(entry.slot))
+            })
         }
         PedalOp::Export { loops, dir } => {
-            let total = loops.len();
-            for (index, (slot, name)) in loops.into_iter().enumerate() {
-                let file = export_file_name(slot, &name);
-                started(index, total, file.clone());
+            let items = loops
+                .into_iter()
+                .map(|(slot, name)| (export_file_name(slot, &name), slot))
+                .collect::<Vec<_>>();
+            let items = items
+                .into_iter()
+                .map(|(file, slot)| (file.clone(), (file, slot)))
+                .collect();
+            run_steps(items, tx, ctx, |(file, slot)| {
                 let dest = unique_path(&dir, &file);
-                match store.export_wav(slot, &dest, &mut bytes_progress(0.0, 1.0)) {
-                    Ok(_) => emit(tx, ctx, TransferEvent::Exported(dest)),
-                    Err(e) => fail(file, e.to_string()),
-                }
-            }
+                store.export_wav(slot, &dest, &mut bytes_progress(0.0, 1.0))?;
+                Ok(TransferEvent::Exported(dest))
+            })
         }
         PedalOp::Remove { slots } => {
-            let total = slots.len();
-            for (index, slot) in slots.into_iter().enumerate() {
-                let file = format!("Bucle {:02}", slot.get());
-                started(index, total, file.clone());
-                match store.remove(slot) {
-                    Ok(()) => emit(tx, ctx, TransferEvent::Removed(slot)),
-                    Err(e) => fail(file, e.to_string()),
-                }
-            }
+            let items = slots.into_iter().map(|s| (loop_label(s), s)).collect();
+            run_steps(items, tx, ctx, |slot| {
+                store.remove(slot)?;
+                Ok(TransferEvent::Removed(slot))
+            })
         }
         PedalOp::Update { slot, settings } => {
-            started(0, 1, format!("Bucle {:02}", slot.get()));
-            match store.update(slot, &settings) {
-                Ok(_) => emit(tx, ctx, TransferEvent::Saved(slot)),
-                Err(e) => fail(format!("Bucle {:02}", slot.get()), e.to_string()),
-            }
+            run_steps(vec![(loop_label(slot), slot)], tx, ctx, |slot| {
+                store.update(slot, &settings)?;
+                Ok(TransferEvent::Saved(slot))
+            })
         }
         PedalOp::Backup { dir } => {
-            let card = match Card::create(&dir) {
-                Ok(card) => card,
-                Err(e) => return fail(dir.display().to_string(), e.to_string()),
-            };
-            let slots = match store.slots() {
-                Ok(slots) => slots,
-                Err(e) => return fail("Pedal".to_owned(), e.to_string()),
-            };
-            let total = slots.len();
-            for (index, slot) in slots.into_iter().enumerate() {
-                let file = format!("Bucle {:02}", slot.get());
-                started(index, total, file.clone());
-                match store.backup_loop(slot, &card, slot, &mut bytes_progress(0.0, 1.0)) {
-                    Ok(()) => emit(
+            let card = Card::create(&dir);
+            let slots = store.slots();
+            let (card, slots) = match (card, slots) {
+                (Ok(card), Ok(slots)) => (card, slots),
+                (Err(e), _) => {
+                    let error = e.to_string();
+                    emit(
                         tx,
                         ctx,
-                        TransferEvent::Exported(
-                            card.root().join(format!("Patch{:02}", slot.get())),
-                        ),
-                    ),
-                    Err(e) => fail(file, e.to_string()),
+                        TransferEvent::Failed {
+                            file: dir.display().to_string(),
+                            error,
+                        },
+                    );
+                    return Ok(());
                 }
-            }
+                (_, Err(e)) => {
+                    let lost = e.breaks_connection();
+                    emit(
+                        tx,
+                        ctx,
+                        TransferEvent::Failed {
+                            file: "Pedal".into(),
+                            error: e.to_string(),
+                        },
+                    );
+                    return if lost { Err(ConnectionLost) } else { Ok(()) };
+                }
+            };
+            let items = slots.into_iter().map(|s| (loop_label(s), s)).collect();
+            run_steps(items, tx, ctx, |slot| {
+                store.backup_loop(slot, &card, slot, &mut bytes_progress(0.0, 1.0))?;
+                Ok(TransferEvent::Exported(
+                    card.root().join(format!("Patch{:02}", slot.get())),
+                ))
+            })
         }
         PedalOp::Restore { dir } => {
-            let card = match Card::open(&dir) {
-                Ok(card) => card,
-                Err(e) => return fail(dir.display().to_string(), e.to_string()),
+            let opened = Card::open(&dir).and_then(|card| Ok((card.list()?, card)));
+            let (listing, card) = match opened {
+                Ok(v) => v,
+                Err(e) => {
+                    let error = e.to_string();
+                    emit(
+                        tx,
+                        ctx,
+                        TransferEvent::Failed {
+                            file: dir.display().to_string(),
+                            error,
+                        },
+                    );
+                    return Ok(());
+                }
             };
-            let listing = match card.list() {
-                Ok(listing) => listing,
-                Err(e) => return fail(dir.display().to_string(), e.to_string()),
-            };
-            let total = listing.len();
-            for (index, l) in listing.into_iter().enumerate() {
-                let file = format!("Bucle {:02}", l.slot.get());
-                started(index, total, file.clone());
+            let items = listing
+                .into_iter()
+                .map(|l| (loop_label(l.slot), l))
+                .collect();
+            run_steps(items, tx, ctx, |l| {
                 if let Err(e) = l.entry {
-                    fail(file, e.to_string());
-                    continue;
+                    return Err(StepError::Local(e.to_string()));
                 }
-                match store.restore_loop(&card, l.slot, l.slot, &mut bytes_progress(0.0, 1.0)) {
-                    Ok(()) => emit(tx, ctx, TransferEvent::Imported(l.slot)),
-                    Err(e) => fail(file, e.to_string()),
-                }
-            }
+                store.restore_loop(&card, l.slot, l.slot, &mut bytes_progress(0.0, 1.0))?;
+                Ok(TransferEvent::Imported(l.slot))
+            })
         }
     }
 }
@@ -629,6 +718,83 @@ mod tests {
                     _ => None,
                 })
                 .expect("debe terminar con la lista")
+        }
+
+        /// Pedal que deja de contestar tras `requests` peticiones, como el
+        /// real cuando se cuelga a mitad de una copia.
+        struct Hangs {
+            pedal: FakePedal,
+            requests: usize,
+        }
+
+        impl std::io::Write for Hangs {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.requests == 0 {
+                    return Ok(buf.len());
+                }
+                self.requests -= 1;
+                self.pedal.write(buf)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl std::io::Read for Hangs {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.pedal.read(buf)
+            }
+        }
+
+        #[test]
+        fn import_stops_at_the_first_communication_failure() {
+            let pedal = Hangs {
+                pedal: FakePedal::new(),
+                requests: 12,
+            };
+            let events = collect(&spawn_pedal(
+                Storage::Card,
+                PedalOp::Import {
+                    files: vec![mp3(), mp3(), mp3()],
+                    normalize: false,
+                },
+                move || Ok(Client::new(pedal)),
+                egui::Context::default(),
+            ));
+            let failures: Vec<&str> = events
+                .iter()
+                .filter_map(|e| match e {
+                    TransferEvent::Failed { error, .. } => Some(error.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(failures.len(), 3, "{failures:?}");
+            assert!(failures[0].contains("no responde"), "{failures:?}");
+            assert!(
+                failures[1..]
+                    .iter()
+                    .all(|f| f.contains("no se ha intentado"))
+            );
+            let started = events
+                .iter()
+                .filter(|e| matches!(e, TransferEvent::Started { .. }))
+                .count();
+            assert_eq!(started, 1, "no se sigue con las demás");
+            assert!(
+                !events.iter().any(|e| matches!(e, TransferEvent::Listed(_))),
+                "tampoco se intenta volver a listar"
+            );
+            assert!(matches!(events.last(), Some(TransferEvent::Done)));
+        }
+
+        #[test]
+        fn listing_reports_the_free_space_of_the_storage() {
+            let events = run(FakePedal::new(), Storage::Card, PedalOp::List);
+            assert!(events.iter().any(|e| matches!(
+                e,
+                TransferEvent::Space { free, total }
+                    if *free == 13_000_000 * 1024 && *total == 15_000_000 * 1024
+            )));
         }
 
         #[test]

@@ -22,8 +22,8 @@ use crate::card::{
     PhraseMeta, apply_settings, imported_meta, patch_dir_name, slot_from_dir_name, wav,
 };
 use crate::device::{SLOTS_PER_STORAGE, Slot};
-use crate::protocol::Client;
 use crate::protocol::request::EntryKind;
+use crate::protocol::{Client, property};
 use crate::{Error, Result};
 
 /// Bytes que se leen del principio de cada WAV para conocer su formato.
@@ -50,6 +50,14 @@ impl Storage {
         }
     }
 
+    /// Propiedades con los KB libres y totales del almacén.
+    fn space_properties(self) -> (u16, u16) {
+        match self {
+            Self::Internal => (property::INTERNAL_FREE_KB, property::INTERNAL_TOTAL_KB),
+            Self::Card => (property::CARD_FREE_KB, property::CARD_TOTAL_KB),
+        }
+    }
+
     /// Nombre para mostrar.
     pub fn label(self) -> &'static str {
         match self {
@@ -58,6 +66,9 @@ impl Storage {
         }
     }
 }
+
+/// Espacio que se deja de margen al copiar un bucle, además de su tamaño.
+const SPACE_MARGIN: u64 = 1024 * 1024;
 
 /// Bucles de un almacén del pedal sobre un cliente del protocolo.
 #[derive(Debug)]
@@ -102,6 +113,17 @@ impl<T: Read + Write> PedalStore<T> {
 
     fn phrase_dir(&self, slot: Slot) -> String {
         join(&self.patch_dir(slot), PHRASE_DIR)
+    }
+
+    /// Espacio del almacén en bytes: `(libres, totales)`, como lo informa el
+    /// propio pedal.
+    pub fn space(&mut self) -> Result<(u64, u64)> {
+        let (free, total) = self.storage.space_properties();
+        let kb = |n: u32| u64::from(n) * 1024;
+        Ok((
+            kb(self.client.property_number(free)?),
+            kb(self.client.property_number(total)?),
+        ))
     }
 
     /// `true` si el almacén está disponible (la tarjeta puede no estar puesta).
@@ -185,6 +207,13 @@ impl<T: Read + Write> PedalStore<T> {
         }
         let mut input = File::open(wav_path)?;
         let total = input.metadata()?.len();
+        // Como el original, se comprueba antes de copiar: el pedal no avisa
+        // cuando se queda sin sitio. El margen cubre los XML y los clústeres.
+        let needed = total + (patch_xml.len() + phrase_xml.len()) as u64 + SPACE_MARGIN;
+        let (free, _) = self.space()?;
+        if needed > free {
+            return Err(Error::NoSpace { needed, free });
+        }
         let result = (|| -> Result<()> {
             self.client.create_folder(&dir)?;
             self.client.create_folder(&self.phrase_dir(slot))?;
@@ -528,6 +557,34 @@ mod tests {
             s.backup_loop(slot(1), &backup, slot(21), &mut |_, _| {}),
             Err(Error::SlotOccupied(21))
         ));
+    }
+
+    #[test]
+    fn space_comes_from_the_storage_properties() {
+        let mut p = FakePedal::new();
+        p.props.insert(12, 1_000);
+        p.props.insert(13, 16_000);
+        p.props.insert(10, 300);
+        p.props.insert(11, 500);
+        let mut s = store(p, Storage::Card);
+        assert_eq!(s.space().unwrap(), (1_000 * 1024, 16_000 * 1024));
+        s.set_storage(Storage::Internal);
+        assert_eq!(s.space().unwrap(), (300 * 1024, 500 * 1024));
+    }
+
+    #[test]
+    fn import_refuses_what_does_not_fit_before_touching_the_pedal() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("t.wav");
+        fs::write(&src, pedal_wav(4_000)).unwrap();
+        let mut p = FakePedal::new();
+        p.props.insert(12, 2); // 2 KB libres
+        let mut s = store(p, Storage::Card);
+        let err = s
+            .import_wav_from(slot(1), &src, "x", &src, &mut |_, _| {})
+            .unwrap_err();
+        assert!(matches!(err, Error::NoSpace { free: 2048, .. }), "{err}");
+        assert!(!pedal(s).dirs.iter().any(|d| d.contains("Patch01")));
     }
 
     #[test]

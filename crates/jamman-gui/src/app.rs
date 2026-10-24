@@ -237,6 +237,7 @@ impl JamApp {
         }
         self.player.stop();
         self.lib.open_pedal(storage);
+        self.space = None;
         self.after_change();
         self.start_pedal(PedalOp::List, TransferKind::PedalList, ctx);
     }
@@ -328,9 +329,13 @@ impl JamApp {
     }
 
     /// Tras cualquier cambio en la tarjeta: olvida formas de onda y espacio.
+    /// El espacio del pedal llega con cada operación (`TransferEvent::Space`).
     fn after_change(&mut self) {
         self.waveforms.clear();
         self.waveform_pending.clear();
+        if self.lib.pedal().is_some() {
+            return;
+        }
         self.space = self
             .lib
             .mount()
@@ -511,6 +516,7 @@ impl JamApp {
                     self.lib.set_listing(listing);
                     card_changed = true;
                 }
+                Ok(TransferEvent::Space { free, total }) => self.space = Some((free, total)),
                 Ok(TransferEvent::Failed { file, error }) => state.failures.push((file, error)),
                 Ok(TransferEvent::Done) | Err(TryRecvError::Disconnected) => {
                     finished = true;

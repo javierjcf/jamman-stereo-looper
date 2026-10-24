@@ -119,6 +119,9 @@ fn list(store: &mut Store) -> Result<(), Box<dyn Error>> {
             Err(err) => println!("{:>3}  ({err})", l.slot.get()),
         }
     }
+    let (free, total) = store.space()?;
+    let gb = |b: u64| b as f64 / 1e9;
+    println!("Libre: {:.2} GB de {:.2} GB", gb(free), gb(total));
     Ok(())
 }
 

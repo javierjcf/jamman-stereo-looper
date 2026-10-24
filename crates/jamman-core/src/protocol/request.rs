@@ -36,6 +36,8 @@ pub mod message_type {
     pub const FILE_CLOSE: u16 = 16;
     /// `FolderContentsRequest`.
     pub const FOLDER_CONTENTS: u16 = 17;
+    /// `GetPropertyRequest`.
+    pub const GET_PROPERTY: u16 = 0x1a;
 }
 
 /// Modo de apertura de un fichero remoto (dos bytes en el cable).
@@ -147,6 +149,13 @@ pub enum Request {
         /// Ruta de la carpeta.
         path: String,
     },
+    /// Lee una propiedad del pedal (validado con el pedal). La carga es una
+    /// lista de `u16` que el original envía vacía (un `u8` con la cuenta) y
+    /// el identificador. Ver [`property`](super::property).
+    GetProperty {
+        /// Identificador de la propiedad.
+        id: u16,
+    },
 }
 
 fn check_path(path: &str) -> Result<()> {
@@ -170,6 +179,7 @@ impl Request {
             Self::FileSeek { .. } => message_type::FILE_SEEK,
             Self::FileClose { .. } => message_type::FILE_CLOSE,
             Self::FolderContents { .. } => message_type::FOLDER_CONTENTS,
+            Self::GetProperty { .. } => message_type::GET_PROPERTY,
         }
     }
 
@@ -217,6 +227,9 @@ impl Request {
                 check_path(path)?;
                 w.string(path);
             }
+            Self::GetProperty { id } => {
+                w.u8(0).u16(*id);
+            }
         }
         Ok(w.into_vec())
     }
@@ -243,6 +256,13 @@ mod tests {
     fn split(frame: &[u8]) -> (Header, &[u8]) {
         let h = Header::parse(frame).unwrap();
         (h, &frame[HEADER_LEN..])
+    }
+
+    #[test]
+    fn get_property_is_an_empty_list_then_the_id() {
+        // Validado con el pedal: así pide el original el espacio libre.
+        let frame = Request::GetProperty { id: 12 }.encode(100).unwrap();
+        assert_eq!(frame, [0x1a, 0, 7, 0, 0, 0, 100, 0, 0, 0, 0, 12, 0]);
     }
 
     #[test]

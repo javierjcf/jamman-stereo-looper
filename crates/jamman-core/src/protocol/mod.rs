@@ -7,6 +7,7 @@ pub mod client;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
 pub mod header;
+pub mod property;
 pub mod request;
 pub mod response;
 pub(crate) mod wire;

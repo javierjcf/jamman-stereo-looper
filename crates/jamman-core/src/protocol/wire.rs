@@ -22,7 +22,6 @@ impl Writer {
     }
 
     /// Solo lo usa el pedal simulado de los tests: las peticiones no llevan `u16`.
-    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn u16(&mut self, v: u16) -> &mut Self {
         self.0.extend_from_slice(&v.to_le_bytes());
         self

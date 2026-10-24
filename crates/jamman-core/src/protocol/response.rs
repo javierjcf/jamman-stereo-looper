@@ -24,8 +24,19 @@ pub mod message_type {
     pub const FILE_READ: u16 = 0x0d;
     /// `FolderContentsResponse`.
     pub const FOLDER_CONTENTS: u16 = 0x12;
+    /// `GetPropertyResponse`.
+    pub const GET_PROPERTY: u16 = 0x1b;
     /// Primer identificador de mensajes asíncronos (iniciados por el pedal).
     pub const FIRST_ASYNC: u16 = 0x8000;
+}
+
+/// Valor de una propiedad del pedal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PropertyValue {
+    /// Número (`u32`).
+    Number(u32),
+    /// Texto.
+    Text(String),
 }
 
 /// Fecha y hora como las envía el pedal: año (`u16`) y cuatro bytes con signo.
@@ -128,6 +139,13 @@ pub enum Response {
         /// Datos leídos.
         data: Vec<u8>,
     },
+    /// Valor de una propiedad.
+    Property {
+        /// Identificador de la propiedad.
+        id: u16,
+        /// Valor.
+        value: PropertyValue,
+    },
     /// Tipo aún sin descifrar; se conserva la carga tal cual.
     Unparsed {
         /// Tipo de mensaje.
@@ -148,6 +166,7 @@ impl Response {
             Self::FolderContents { .. } => message_type::FOLDER_CONTENTS,
             Self::FileOpen { .. } => message_type::FILE_OPEN,
             Self::FileRead { .. } => message_type::FILE_READ,
+            Self::Property { .. } => message_type::GET_PROPERTY,
             Self::Unparsed { message_type, .. } => *message_type,
         }
     }
@@ -202,6 +221,16 @@ impl Response {
                 let data = r.take(len)?.to_vec();
                 Ok(Self::FileRead { position, data })
             }
+            message_type::GET_PROPERTY => {
+                let id = r.u16()?;
+                // Como el original: de 0x8000 a 0x8018 son textos.
+                let value = if (0x8000..=0x8018).contains(&id) {
+                    PropertyValue::Text(r.string()?)
+                } else {
+                    PropertyValue::Number(r.u32()?)
+                };
+                Ok(Self::Property { id, value })
+            }
             other if other >= message_type::FIRST_ASYNC => Err(Error::UnknownMessageType(other)),
             other => Ok(Self::Unparsed {
                 message_type: other,
@@ -227,6 +256,37 @@ mod tests {
             payload_len: 0,
             serial: 0,
         }
+    }
+
+    #[test]
+    fn parses_a_numeric_property_as_the_pedal_sends_it() {
+        // Respuesta real a la propiedad 12 (KB usados en la tarjeta).
+        let mut w = Writer::new();
+        w.u16(12).u32(13_368_608);
+        let payload = w.into_vec();
+        let h = header(0x1b);
+        assert_eq!(
+            Response::parse(&h, &payload).unwrap(),
+            Response::Property {
+                id: 12,
+                value: PropertyValue::Number(13_368_608)
+            }
+        );
+    }
+
+    #[test]
+    fn properties_from_0x8000_are_text() {
+        let mut w = Writer::new();
+        w.u16(0x8001).string("1.2.3");
+        let payload = w.into_vec();
+        let h = header(0x1b);
+        assert_eq!(
+            Response::parse(&h, &payload).unwrap(),
+            Response::Property {
+                id: 0x8001,
+                value: PropertyValue::Text("1.2.3".into())
+            }
+        );
     }
 
     #[test]

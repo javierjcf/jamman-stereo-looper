@@ -22,6 +22,8 @@ pub struct FakePedal {
     pub files: BTreeMap<String, Vec<u8>>,
     /// Carpetas existentes.
     pub dirs: BTreeSet<String>,
+    /// Propiedades numéricas (por defecto, espacio de sobra).
+    pub props: BTreeMap<u16, u32>,
     input: Vec<u8>,
     output: VecDeque<u8>,
     open: HashMap<i64, Open>,
@@ -54,6 +56,13 @@ impl FakePedal {
         Self {
             files: BTreeMap::new(),
             dirs,
+            // KB libres y totales: memoria interna (10, 11) y tarjeta (12, 13).
+            props: BTreeMap::from([
+                (10, 400_000),
+                (11, 500_000),
+                (12, 13_000_000),
+                (13, 15_000_000),
+            ]),
             input: Vec::new(),
             output: VecDeque::new(),
             open: HashMap::new(),
@@ -231,6 +240,19 @@ impl FakePedal {
                     w.string(d);
                 });
                 self.reply(resp::FOLDER_CONTENTS, serial, &w.into_vec());
+            }
+            req::GET_PROPERTY => {
+                let count = r.u8().unwrap();
+                for _ in 0..count {
+                    r.u16().unwrap();
+                }
+                let id = r.u16().unwrap();
+                let Some(&value) = self.props.get(&id) else {
+                    return self.failure(serial, "Unknown property.");
+                };
+                let mut w = Writer::new();
+                w.u16(id).u32(value);
+                self.reply(resp::GET_PROPERTY, serial, &w.into_vec());
             }
             other => self.failure(serial, &format!("Unsupported request {other}")),
         }

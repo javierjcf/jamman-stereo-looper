@@ -50,12 +50,37 @@ pub enum Error {
     InvalidSetting(String),
     /// La posición tiene ajustes guardados pero ningún audio grabado.
     MissingAudio(u8),
+    /// No hay espacio libre suficiente para copiar.
+    NoSpace {
+        /// Bytes que se necesitan.
+        needed: u64,
+        /// Bytes libres.
+        free: u64,
+    },
     /// No hay ningún JamMan conectado por USB.
     PedalNotFound,
     /// Error del puerto serie.
     Serial(String),
     /// Error de entrada/salida.
     Io(std::io::Error),
+}
+
+impl Error {
+    /// `true` si, tras este error, la conversación con el pedal ya no es
+    /// fiable (el puerto falló o llegó un mensaje que no encaja) y no tiene
+    /// sentido seguir enviándole peticiones.
+    pub fn breaks_connection(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_)
+                | Self::Serial(_)
+                | Self::Truncated { .. }
+                | Self::InvalidUtf8
+                | Self::UnknownMessageType(_)
+                | Self::PayloadTooLarge(_)
+                | Self::UnexpectedResponse { .. }
+        )
+    }
 }
 
 /// Alias de resultado de la librería.
@@ -98,11 +123,21 @@ impl fmt::Display for Error {
                 f,
                 "la posición {n} tiene ajustes guardados pero ningún audio grabado"
             ),
+            Self::NoSpace { needed, free } => write!(
+                f,
+                "no hay espacio suficiente: hacen falta {:.1} MB y quedan {:.1} MB libres",
+                *needed as f64 / 1e6,
+                *free as f64 / 1e6
+            ),
             Self::PedalNotFound => write!(
                 f,
                 "no se encuentra ningún JamMan conectado por USB (1210:0020)"
             ),
             Self::Serial(why) => write!(f, "puerto serie: {why}"),
+            Self::Io(e) if e.kind() == std::io::ErrorKind::TimedOut => write!(
+                f,
+                "el pedal no responde; si no se recupera, apágalo y vuelve a encenderlo"
+            ),
             Self::Io(e) => write!(f, "error de E/S: {e}"),
         }
     }
@@ -120,5 +155,33 @@ impl std::error::Error for Error {
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_transport_and_framing_errors_break_the_connection() {
+        let timeout = Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        assert!(timeout.breaks_connection());
+        assert!(timeout.to_string().contains("no responde"));
+        assert!(
+            Error::Truncated {
+                needed: 4,
+                available: 0
+            }
+            .breaks_connection()
+        );
+        assert!(!Error::Device("The folder does not exist.".into()).breaks_connection());
+        assert!(!Error::SlotOccupied(3).breaks_connection());
+        assert!(
+            !Error::NoSpace {
+                needed: 10,
+                free: 5
+            }
+            .breaks_connection()
+        );
     }
 }

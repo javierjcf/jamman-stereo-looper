@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 
 use super::header::{HEADER_LEN, Header};
 use super::request::{EntryKind, OpenMode, Request};
-use super::response::{EntryInfo, Response, WhoAmI, message_type};
+use super::response::{EntryInfo, PropertyValue, Response, WhoAmI, message_type};
 use crate::{Error, Result};
 
 /// Límite de seguridad para la carga declarada por una respuesta (1 MiB).
@@ -106,6 +106,24 @@ impl<T: Read + Write> Client<T> {
         match self.call(request)? {
             Response::Success => Ok(()),
             other => Err(unexpected(what, &other)),
+        }
+    }
+
+    /// Lee una propiedad del pedal (ver [`property`](super::property)).
+    pub fn property(&mut self, id: u16) -> Result<PropertyValue> {
+        match self.call(&Request::GetProperty { id })? {
+            Response::Property { id: got, value } if got == id => Ok(value),
+            other => Err(unexpected("GetProperty", &other)),
+        }
+    }
+
+    /// Lee una propiedad numérica.
+    pub fn property_number(&mut self, id: u16) -> Result<u32> {
+        match self.property(id)? {
+            PropertyValue::Number(n) => Ok(n),
+            PropertyValue::Text(t) => Err(Error::InvalidMetadata(format!(
+                "la propiedad {id} es un texto ({t:?}), no un número"
+            ))),
         }
     }
 
@@ -492,6 +510,15 @@ mod tests {
             .collect();
         assert_eq!(sent, data, "los bloques reconstruyen el fichero");
         assert_eq!(seen.last(), Some(&(size as u64, size as u64)));
+    }
+
+    #[test]
+    fn property_reads_a_number() {
+        let mut payload = Writer::new();
+        payload.u16(12).u32(13_368_608);
+        let mock = Mock::with_replies(vec![reply(0x1b, 0, &payload.into_vec())]);
+        let mut client = Client::new(mock);
+        assert_eq!(client.property_number(12).unwrap(), 13_368_608);
     }
 
     #[test]

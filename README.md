@@ -278,6 +278,8 @@ captura de la ventana (ver `crates/jamman-gui/src/devshot.rs`).
 
 ## Documentación
 
+- [Cómo funciona el programa](docs/05-funcionamiento.md): visión general del
+  código, para empezar por aquí
 - [Proceso seguido](docs/01-proceso.md)
 - [Decisiones de diseño](docs/02-decisiones.md)
 - [Protocolo del pedal](docs/03-protocolo.md)

@@ -1,0 +1,11 @@
+# DigiTech JamMan Stereo (USB 1210:0020, puerto serie CDC-ACM -> /dev/ttyACM*).
+#
+# Da acceso al pedal al usuario con la sesión abierta (TAG "uaccess"), sin
+# tocar grupos ni dar acceso a otros puertos serie. El número 70 importa: las
+# reglas "uaccess" deben aplicarse antes que 73-seat-late.rules.
+#
+# Instalación:
+#   sudo cp 70-jamman.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#   sudo udevadm trigger --action=change --subsystem-match=tty
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1210", ATTRS{idProduct}=="0020", TAG+="uaccess"

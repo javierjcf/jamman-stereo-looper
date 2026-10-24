@@ -130,8 +130,28 @@ jamman ls /               # lista una carpeta del pedal
 jamman get <ruta> <destino>
 ```
 
-En Linux el pedal aparece como `/dev/ttyACM*`; tu usuario necesita permiso sobre
-ese dispositivo (grupo `uucp` en Arch, `dialout` en Debian/Ubuntu).
+#### Permiso para usar el pedal en Linux
+
+En Linux el pedal aparece como el puerto serie `/dev/ttyACM*`, que por defecto
+solo pueden abrir `root` y un grupo del sistema. Cualquier programa (también
+este) se ejecuta con los permisos de tu usuario, así que hay que dar acceso una
+vez. En Windows no hace falta.
+
+**Recomendado: regla udev.** Da acceso solo al JamMan y solo al usuario con la
+sesión abierta, sin cerrar sesión:
+
+```bash
+sudo cp packaging/linux/70-jamman.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger --action=change --subsystem-match=tty
+```
+
+**Alternativa: grupo del puerto serie.** Da acceso a todos los puertos serie
+y requiere cerrar e iniciar sesión:
+
+```bash
+sudo usermod -aG uucp $USER      # Arch; en Debian/Ubuntu el grupo es dialout
+```
 
 ## Qué falta
 

@@ -1,36 +1,54 @@
-//! Cabecera de la tarjeta: cuál está abierta, ocupación y acciones sobre la
-//! selección.
+//! Cabecera del destino (tarjeta del PC o pedal por USB): cuál está abierto,
+//! ocupación y acciones sobre la selección.
 
 use eframe::egui::{self, Align, Layout, RichText};
 use jamman_core::device::SLOTS_PER_STORAGE;
+use jamman_core::pedal::Storage;
 
 use crate::app::JamApp;
 use crate::{fmt, theme};
 
+/// Destino elegido en el selector.
+enum Target {
+    Card(std::path::PathBuf),
+    Pedal(Storage),
+}
+
 pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
+    let on_pedal = app.lib.pedal().is_some();
+    let busy = app.transfer.is_some();
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("💾 Tarjeta").strong().size(15.0));
-        card_selector(app, ui);
-        if ui.button("🔍").on_hover_text("Detectar tarjetas").clicked() {
+        let title = if on_pedal {
+            "🎸 Pedal"
+        } else {
+            "💾 Tarjeta"
+        };
+        ui.label(RichText::new(title).strong().size(15.0));
+        target_selector(app, ui);
+        if ui
+            .button("🔍")
+            .on_hover_text("Detectar tarjetas y el pedal")
+            .clicked()
+        {
             app.detect_cards();
         }
         if ui
             .button("📂")
-            .on_hover_text("Abrir una carpeta como tarjeta…")
+            .on_hover_text("Abrir una carpeta como tarjeta (también una copia de seguridad)…")
             .clicked()
         {
             app.pick_card_folder();
         }
         if ui
-            .add_enabled(app.lib.card().is_some(), egui::Button::new("⟳"))
-            .on_hover_text("Volver a leer la tarjeta")
+            .add_enabled(app.lib.is_open() && !busy, egui::Button::new("⟳"))
+            .on_hover_text("Volver a leer")
             .clicked()
         {
-            app.reload();
+            app.refresh(ui.ctx());
         }
 
-        if app.lib.card().is_some() {
+        if app.lib.is_open() && !app.lib.loading {
             ui.separator();
             let used = app.lib.rows().len();
             ui.label(format!("{used}/{SLOTS_PER_STORAGE}"))
@@ -54,7 +72,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         }
     });
 
-    if app.lib.card().is_none() {
+    if !app.lib.is_open() {
         return;
     }
     let selected = app.lib.selection().len();
@@ -79,51 +97,98 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         }
         let delete =
             egui::Button::new(RichText::new(format!("🗑 Borrar ({selected})")).color(theme::DANGER));
-        if ui.add_enabled(selected > 0, delete).clicked() {
+        if ui.add_enabled(selected > 0 && !busy, delete).clicked() {
             app.ask_delete_selection();
         }
+        if on_pedal {
+            ui.separator();
+            if ui
+                .add_enabled(!busy, egui::Button::new("💾 Copia de seguridad…"))
+                .on_hover_text(
+                    "Copia todos los bucles del pedal, con sus ajustes, a una carpeta. \
+                     La copia se puede abrir con 📂 como si fuera una tarjeta.",
+                )
+                .clicked()
+            {
+                app.backup(ui.ctx());
+            }
+            if ui
+                .add_enabled(!busy, egui::Button::new("⤴ Restaurar…"))
+                .on_hover_text(
+                    "Sube al pedal los bucles de una copia de seguridad, \
+                     en sus mismas posiciones si están libres",
+                )
+                .clicked()
+            {
+                app.restore(ui.ctx());
+            }
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.weak("Ctrl+A: todo · Supr: borrar · Espacio: escuchar");
+            ui.weak(if on_pedal {
+                "Ctrl+A: todo · Supr: borrar"
+            } else {
+                "Ctrl+A: todo · Supr: borrar · Espacio: escuchar"
+            });
         });
     });
 }
 
-fn card_selector(app: &mut JamApp, ui: &mut egui::Ui) {
-    let current = app.lib.mount().map(|p| p.to_path_buf());
+fn target_selector(app: &mut JamApp, ui: &mut egui::Ui) {
+    let current_card = app.lib.mount().map(|p| p.to_path_buf());
+    let current_pedal = app.lib.pedal();
     let label = |p: &std::path::Path| {
         p.file_name().map_or_else(
             || p.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         )
     };
-    let selected_text = current
-        .as_deref()
-        .map_or_else(|| "Ninguna abierta".to_owned(), label);
-    let mut open = None;
-    egui::ComboBox::from_id_salt("card_selector")
+    let selected_text = match (&current_card, current_pedal) {
+        (_, Some(storage)) => storage.label().to_owned(),
+        (Some(path), None) => label(path),
+        (None, None) => "Ninguno abierto".to_owned(),
+    };
+    let mut choice = None;
+    egui::ComboBox::from_id_salt("target_selector")
         .selected_text(selected_text)
-        .width(170.0)
+        .width(190.0)
         .show_ui(ui, |ui| {
+            ui.label(RichText::new("Tarjetas en el equipo").small().weak());
             if app.detected.is_empty() {
-                ui.weak("No se ha detectado ninguna tarjeta");
+                ui.weak("Ninguna detectada");
             }
             for path in &app.detected {
                 if ui
-                    .selectable_label(current.as_deref() == Some(path.as_path()), label(path))
+                    .selectable_label(
+                        current_card.as_deref() == Some(path.as_path()),
+                        format!("💾 {}", label(path)),
+                    )
                     .on_hover_text(path.display().to_string())
                     .clicked()
                 {
-                    open = Some(path.clone());
+                    choice = Some(Target::Card(path.clone()));
                 }
             }
-        })
-        .response
-        .on_hover_text(
-            current
-                .as_deref()
-                .map_or_else(String::new, |p| p.display().to_string()),
-        );
-    if let Some(path) = open {
-        app.open_card(&path);
+            ui.separator();
+            ui.label(RichText::new("Pedal por USB").small().weak());
+            if app.pedal_port.is_none() {
+                ui.weak("No conectado");
+            } else {
+                for storage in Storage::ALL {
+                    if ui
+                        .selectable_label(
+                            current_pedal == Some(storage),
+                            format!("🎸 {}", storage.label()),
+                        )
+                        .clicked()
+                    {
+                        choice = Some(Target::Pedal(storage));
+                    }
+                }
+            }
+        });
+    match choice {
+        Some(Target::Card(path)) => app.open_card(&path),
+        Some(Target::Pedal(storage)) => app.open_pedal(storage, ui.ctx()),
+        None => {}
     }
 }

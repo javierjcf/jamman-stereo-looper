@@ -2,17 +2,14 @@
 
 use eframe::egui::{self, RichText};
 
-use crate::app::{JamApp, StatusKind, TransferKind};
+use crate::app::{JamApp, StatusKind};
 use crate::{fmt, theme};
 
 pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         if let Some(t) = &app.transfer {
             ui.spinner();
-            let verb = match t.kind {
-                TransferKind::Import => "Añadiendo",
-                TransferKind::Export => "Exportando",
-            };
+            let verb = t.kind.verb();
             ui.label(format!("{verb} {}/{}: {}", t.index + 1, t.total, t.file));
             ui.add(
                 egui::ProgressBar::new(t.progress)

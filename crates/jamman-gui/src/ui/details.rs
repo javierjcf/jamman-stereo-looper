@@ -12,6 +12,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     let Some(slot) = app.lib.draft.as_ref().map(|d| d.slot) else {
         return;
     };
+    let on_pedal = app.lib.pedal().is_some();
     let summary = app
         .lib
         .row(slot)
@@ -185,17 +186,20 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         ui.add_space(14.0);
         ui.separator();
         ui.label(RichText::new("Acciones").strong());
-        ui.horizontal(|ui| {
-            ui.label("Mover a la posición");
-            ui.add(DragValue::new(&mut target).range(1..=SLOTS_PER_STORAGE));
-            if ui
-                .add_enabled(target != slot.get(), egui::Button::new("Mover"))
-                .on_hover_text("Si la posición está ocupada, se intercambian")
-                .clicked()
-            {
-                move_to = Slot::new(target).ok();
-            }
-        });
+        // El pedal no admite renombrar carpetas: mover solo en tarjetas del PC.
+        if !on_pedal {
+            ui.horizontal(|ui| {
+                ui.label("Mover a la posición");
+                ui.add(DragValue::new(&mut target).range(1..=SLOTS_PER_STORAGE));
+                if ui
+                    .add_enabled(target != slot.get(), egui::Button::new("Mover"))
+                    .on_hover_text("Si la posición está ocupada, se intercambian")
+                    .clicked()
+                {
+                    move_to = Slot::new(target).ok();
+                }
+            });
+        }
         if ui
             .button("⬅ Exportar a la carpeta del explorador")
             .on_hover_text("Copia el WAV de este bucle a la carpeta abierta en el explorador")
@@ -213,7 +217,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
 
     app.move_target = (Some(slot), target);
     if save {
-        app.save();
+        app.save(ui.ctx());
     }
     if discard {
         app.lib.discard_draft();

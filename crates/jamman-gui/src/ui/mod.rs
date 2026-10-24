@@ -33,7 +33,8 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     handle_shortcuts(app, &ctx);
 
     egui::Panel::top("toolbar").show(ui, |ui| toolbar::show(app, ui));
-    if app.lib.selected().is_some() {
+    // En el pedal no se puede escuchar sin descargar: sin reproductor.
+    if app.lib.selected().is_some() && app.lib.pedal().is_none() {
         egui::Panel::top("player").show(ui, |ui| player_bar::show(app, ui));
     }
     egui::Panel::bottom("status").show(ui, |ui| status_bar::show(app, ui));
@@ -75,7 +76,7 @@ fn handle_dropped_files(app: &mut JamApp, ctx: &egui::Context) {
 
 fn handle_shortcuts(app: &mut JamApp, ctx: &egui::Context) {
     if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
-        app.save();
+        app.save(ctx);
     }
     // Las teclas sueltas no deben robar el texto que se está escribiendo.
     if ctx.egui_wants_keyboard_input() {

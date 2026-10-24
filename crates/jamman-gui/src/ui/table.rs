@@ -18,15 +18,24 @@ enum RowAction {
 }
 
 pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
-    if app.lib.card().is_none() {
+    if !app.lib.is_open() {
         empty_state(ui);
+        return;
+    }
+    if app.lib.loading {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() * 0.35);
+            ui.spinner();
+            ui.label("Leyendo los bucles del pedal por USB…");
+            ui.weak("Con muchos bucles tarda unos segundos.");
+        });
         return;
     }
     let rows: Vec<Row> = app.lib.visible().into_iter().cloned().collect();
     if rows.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.weak(if app.lib.rows().is_empty() {
-                "La tarjeta está vacía. Añade canciones desde el explorador, con «＋ Añadir canciones…» o arrastrándolas aquí."
+                "No hay bucles. Añade canciones desde el explorador, con «＋ Añadir canciones…» o arrastrándolas aquí."
             } else {
                 "Ningún bucle coincide con la búsqueda."
             });

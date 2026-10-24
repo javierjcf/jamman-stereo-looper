@@ -62,7 +62,7 @@ fn confirm_delete(app: &mut JamApp, ctx: &egui::Context) {
     match decision {
         Some(true) => {
             app.confirm_delete = None;
-            app.delete(&slots);
+            app.delete(&slots, ctx);
         }
         Some(false) => app.confirm_delete = None,
         None => {}
@@ -107,7 +107,7 @@ fn unsaved_changes(app: &mut JamApp, ctx: &egui::Context) {
     app.pending_select = None;
     match choice {
         Choice::Save => {
-            app.save();
+            app.save(ctx);
             if !app.lib.has_unsaved_changes() {
                 app.apply_pending(pending);
             }

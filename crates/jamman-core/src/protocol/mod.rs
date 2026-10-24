@@ -4,6 +4,8 @@
 //! dato. Esta capa no hace E/S: solo construye y descifra mensajes.
 
 pub mod client;
+#[cfg(test)]
+pub(crate) mod fake;
 pub mod header;
 pub mod request;
 pub mod response;

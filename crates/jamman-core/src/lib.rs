@@ -8,6 +8,7 @@ pub mod audio;
 pub mod card;
 pub mod device;
 pub mod error;
+pub mod pedal;
 pub mod protocol;
 
 pub use error::{Error, Result};

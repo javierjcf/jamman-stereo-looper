@@ -4,6 +4,7 @@
 
 mod args;
 mod card_cmd;
+mod pedal_cmd;
 mod port;
 
 use std::error::Error;
@@ -53,14 +54,19 @@ fn run() -> Result<(), Box<dyn Error>> {
     if args.first().map(String::as_str) == Some("card") {
         return card_cmd::run(args.split_off(1));
     }
+    if args.first().map(String::as_str) == Some("pedal") {
+        return pedal_cmd::run(args.split_off(1), port_name);
+    }
 
     let Some((command, rest)) = args.split_first() else {
-        println!("{}{}", HELP_PEDAL, card_cmd::HELP);
+        println!("{}{}\n\n{}", HELP_PEDAL, pedal_cmd::HELP, card_cmd::HELP);
         return Ok(());
     };
 
     match (command.as_str(), rest) {
-        ("help" | "--help" | "-h", _) => println!("{}{}", HELP_PEDAL, card_cmd::HELP),
+        ("help" | "--help" | "-h", _) => {
+            println!("{}{}\n\n{}", HELP_PEDAL, pedal_cmd::HELP, card_cmd::HELP)
+        }
         ("about", []) => about(),
         ("ports", []) => port::print_ports()?,
         ("who-am-i", []) => {

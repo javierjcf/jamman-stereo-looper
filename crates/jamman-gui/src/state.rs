@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use jamman_core::Result;
 
 use crate::selection::{ClickMods, Selection};
-use jamman_core::card::{Card, Entry, LoopSettings};
+use jamman_core::card::{Card, Entry, Listing, LoopSettings};
 use jamman_core::device::Slot;
+use jamman_core::pedal::Storage;
 
 /// Una fila de la tabla: un bucle de la tarjeta.
 #[derive(Debug, Clone)]
@@ -94,11 +95,23 @@ impl Draft {
     }
 }
 
+/// Origen de los bucles que se muestran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// Tarjeta (o copia) en el PC: se lee directamente.
+    Card(PathBuf),
+    /// Un almacén del pedal por USB: la lista llega en segundo plano.
+    Pedal(Storage),
+}
+
 /// Biblioteca: la tarjeta abierta y la vista sobre sus bucles.
 #[derive(Debug, Default)]
 pub struct Library {
     card: Option<Card>,
     mount: Option<PathBuf>,
+    source: Option<Source>,
+    /// `true` mientras se espera la lista del pedal.
+    pub loading: bool,
     rows: Vec<Row>,
     selection: Selection<Slot>,
     /// Texto de búsqueda.
@@ -117,9 +130,36 @@ impl Library {
         let card = Card::open(path)?;
         self.mount = Some(path.to_path_buf());
         self.card = Some(card);
+        self.source = Some(Source::Card(path.to_path_buf()));
+        self.loading = false;
         self.selection.clear();
         self.draft = None;
         self.reload()
+    }
+
+    /// Muestra un almacén del pedal. La lista se rellena con
+    /// [`Library::set_listing`] cuando llega del USB.
+    pub fn open_pedal(&mut self, storage: Storage) {
+        self.card = None;
+        self.mount = None;
+        self.source = Some(Source::Pedal(storage));
+        self.rows.clear();
+        self.selection.clear();
+        self.draft = None;
+        self.loading = true;
+    }
+
+    /// Almacén del pedal mostrado, si es el pedal.
+    pub fn pedal(&self) -> Option<Storage> {
+        match self.source {
+            Some(Source::Pedal(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// `true` si hay algo abierto (tarjeta o pedal).
+    pub fn is_open(&self) -> bool {
+        self.source.is_some()
     }
 
     /// Tarjeta abierta.
@@ -135,12 +175,20 @@ impl Library {
     /// Vuelve a leer la tarjeta. Conserva la selección de los bucles que sigan
     /// ahí y los cambios sin guardar del bucle principal.
     pub fn reload(&mut self) -> Result<()> {
+        // El pedal se recarga en segundo plano (ver `set_listing`).
         let Some(card) = &self.card else {
-            self.rows.clear();
             return Ok(());
         };
-        self.rows = card
-            .list()?
+        let listing = card.list()?;
+        self.set_listing(listing);
+        Ok(())
+    }
+
+    /// Sustituye las filas por una lista de bucles leída (de la tarjeta o del
+    /// pedal). Conserva la selección y los cambios sin guardar del principal.
+    pub fn set_listing(&mut self, listing: Vec<Listing>) {
+        self.loading = false;
+        self.rows = listing
             .into_iter()
             .map(|l| match l.entry {
                 Ok(e) => Row::from_entry(&e),
@@ -160,7 +208,6 @@ impl Library {
         if !keep_edits {
             self.rebuild_draft();
         }
-        Ok(())
     }
 
     /// Todas las filas, por posición.
@@ -265,7 +312,16 @@ impl Library {
         self.draft.as_ref().is_some_and(Draft::is_dirty)
     }
 
-    /// Guarda los ajustes en edición.
+    /// Marca los ajustes en edición como guardados (tras guardarlos en el
+    /// pedal en segundo plano); la próxima lista trae los valores nuevos.
+    pub fn mark_draft_saved(&mut self) {
+        if let Some(d) = &mut self.draft {
+            d.original = d.edited.clone();
+        }
+    }
+
+    /// Guarda los ajustes en edición en la tarjeta del PC. Con el pedal no
+    /// hace nada: se guardan en segundo plano.
     pub fn save_draft(&mut self) -> Result<()> {
         let (Some(card), Some(draft)) = (&self.card, &self.draft) else {
             return Ok(());
@@ -433,6 +489,29 @@ mod tests {
         lib.reload().unwrap();
         assert_eq!(lib.draft.as_ref().unwrap().edited.name, "editando");
         assert!(lib.has_unsaved_changes());
+    }
+
+    #[test]
+    fn a_pedal_listing_arrives_later_and_keeps_the_selection() {
+        let (_d, source) = library_with(&[(1, "a", 4), (2, "b", 4)]);
+        let listing = || source.card().unwrap().list().unwrap();
+
+        let mut lib = Library::default();
+        lib.open_pedal(Storage::Card);
+        assert!(lib.loading && lib.rows().is_empty());
+        assert_eq!(lib.pedal(), Some(Storage::Card));
+        lib.set_listing(listing());
+        assert!(!lib.loading);
+        assert_eq!(names(&lib), ["a", "b"]);
+
+        lib.select(Some(slot(2)));
+        lib.draft.as_mut().unwrap().edited.name = "editando".into();
+        lib.set_listing(listing());
+        assert_eq!(lib.selected(), Some(slot(2)));
+        assert_eq!(lib.draft.as_ref().unwrap().edited.name, "editando");
+        lib.mark_draft_saved();
+        assert!(!lib.has_unsaved_changes());
+        assert!(lib.reload().is_ok(), "recargar el pedal no hace nada aquí");
     }
 
     #[test]

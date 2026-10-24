@@ -109,3 +109,22 @@ duradero**; ninguna funcionalidad sin necesidad real.
 - Selección múltiple genérica (`selection.rs`) compartida por las dos listas; el
   bucle "principal" (el último pulsado) es el que se edita y reproduce.
 - La ruta se muestra con la carpeta personal abreviada como `~`.
+
+## D18. El pedal como un destino más
+- `PedalStore` ofrece por USB lo mismo que `Card` (listar, leer, importar,
+  exportar, borrar, editar), reutilizando los mismos XML y ajustes: la
+  interfaz no distingue apenas entre tarjeta y pedal.
+- El puerto se abre **en cada operación**, en un hilo, y se cierra al acabar:
+  la interfaz no se bloquea y si se desenchufa el pedal no queda nada colgado.
+  Cada operación termina volviendo a listar, así la tabla siempre refleja el
+  pedal.
+- Al subir un bucle, `patch.xml` se escribe el último: si algo falla antes, se
+  borra la carpeta y el pedal no ve un bucle a medias.
+- Por USB no hay reproducción ni mover/intercambiar: obligaría a descargar y
+  volver a subir decenas de MB. La copia de seguridad usa el formato de la
+  tarjeta para poder abrirla y restaurarla con las mismas herramientas.
+- `serialport` es una característica (`serial`) del núcleo para que los tests
+  y quien solo use la tarjeta no la necesiten. Los tests usan `FakePedal`
+  (característica `testing`), que responde con los formatos validados.
+- Permiso en Linux con una regla udev (`uaccess`) en lugar del grupo `uucp`:
+  solo el JamMan, solo el usuario de la sesión y sin reiniciar sesión.

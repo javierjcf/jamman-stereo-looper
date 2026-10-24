@@ -18,13 +18,13 @@ use jamman_core::{audio, device};
 use args::take_option;
 
 const HELP_PEDAL: &str = "\
-jamman — gestor del DigiTech JamMan Stereo (EXPERIMENTAL: protocolo sin validar)
+jamman — gestor del DigiTech JamMan Stereo
 
 USO:
     jamman [--port <PUERTO>] <comando> [argumentos]
     jamman card <subcomando> ...        (solo la tarjeta, sin pedal)
 
-COMANDOS DEL PEDAL (requieren conexión USB):
+COMANDOS DE BAJO NIVEL DEL PEDAL (requieren conexión USB):
     about                 Datos conocidos del dispositivo
     ports                 Lista los puertos serie y marca los del JamMan
     who-am-i              Identificación que devuelve el pedal

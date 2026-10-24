@@ -89,8 +89,21 @@ respuestas → cliente síncrono sobre `Read + Write`.
    (`JAMMAN_SCREENSHOT`), lo que permitió detectar y corregir la lentitud de la
    forma de onda en una SD lenta y el ancho de la tabla.
 
+## 8. Validación con el pedal e integración (24/10/2026)
+1. Permiso de acceso al puerto con una regla udev (`packaging/linux/70-jamman.rules`).
+2. Primeras pruebas con la CLI: el `WhoAmI` falló por la longitud de la
+   cabecera (incluye el número de serie). Con un volcado en crudo se corrigió.
+3. Pruebas aisladas en `/mnt/sdfs/jamman-test` (borrada después): listar, leer
+   25 MB íntegros, crear carpeta, escribir varios bloques y borrar. Formatos
+   confirmados en [03-protocolo.md](03-protocolo.md), sección 0.
+4. `FakePedal` (pedal simulado con esos formatos) para hacer TDD del resto sin
+   arriesgar el pedal.
+5. `jamman-core::pedal::PedalStore`: los bucles por USB con el mismo modelo que
+   la tarjeta. CLI `jamman pedal …` probada con el pedal: listar 62 bucles
+   (5 s), añadir un MP3 y exportarlo idéntico, copia de seguridad.
+6. GUI: el pedal como un destino más del selector, con las operaciones en
+   segundo plano. Comprobada con capturas contra el pedal real.
+
 ## Pendiente
-- Validar con el pedal (ver sección 8 de [03-protocolo.md](03-protocolo.md)).
-- Subida de bucles por USB (necesita validar el modo de escritura).
+- Probar en el pedal restaurar, borrar y editar ajustes por USB.
 - Mensajes asíncronos y propiedades.
-- Integrar el pedal por USB en la interfaz gráfica.

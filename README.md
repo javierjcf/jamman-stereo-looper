@@ -4,16 +4,20 @@ Herramienta libre y multiplataforma (Linux y Windows) para gestionar los bucles
 del pedal **DigiTech JamMan Stereo**, pensada para sustituir al software
 original (JamManager XT) cuando deje de funcionar.
 
-**No hace falta conectar el pedal**: basta con meter su tarjeta SD en el
-ordenador. Las canciones se añaden, escuchan, editan y exportan directamente en
-la tarjeta.
+Funciona de dos formas:
+
+- **Con la tarjeta SD en el ordenador**, sin el pedal: las canciones se añaden,
+  escuchan, editan y exportan directamente en la tarjeta.
+- **Con el pedal conectado por USB**: se gestionan su memoria interna y la
+  tarjeta que tenga puesta, y se hacen copias de seguridad.
 
 ![Interfaz gráfica: explorador del equipo, tarjeta y ajustes del bucle](docs/img/gui.png)
 
 > **Estado: en desarrollo.** La gestión de la tarjeta SD (interfaz gráfica y
-> línea de comandos) funciona y está probada con una tarjeta real. La conexión
-> con el pedal por USB se ha deducido por ingeniería inversa y **aún no se ha
-> validado con el pedal** ([docs/03-protocolo.md](docs/03-protocolo.md)).
+> línea de comandos) funciona y está probada con una tarjeta real, y el pedal
+> carga los bucles que escribe la app. El protocolo USB, deducido por ingeniería
+> inversa, está **validado con el pedal** para listar, leer, escribir y borrar
+> ([docs/03-protocolo.md](docs/03-protocolo.md)).
 
 ## Funciones
 
@@ -37,6 +41,18 @@ la tarjeta.
 - **Selección múltiple** en ambos lados: Ctrl+clic, Mayús+clic y Ctrl+A.
 - Las transferencias van en segundo plano con barra de progreso; al terminar se
   resumen los errores, si los hay.
+
+### Pedal por USB
+- El selector de destino muestra, además de las tarjetas, la **memoria
+  interna** y la **tarjeta del pedal** cuando está conectado.
+- Con el pedal se puede lo mismo que con la tarjeta: listar, añadir desde el
+  explorador (con conversión), exportar, borrar y editar los ajustes.
+- **💾 Copia de seguridad**: copia todos los bucles, con sus ajustes, a una
+  carpeta con el formato de la tarjeta (se puede abrir con 📂). **⤴ Restaurar**
+  sube una copia al pedal, en sus mismas posiciones si están libres.
+- Las operaciones van en segundo plano; el puerto solo se abre mientras duran.
+- Por USB no se puede escuchar ni mover bucles (habría que descargarlos
+  enteros); para eso, saca la tarjeta o exporta.
 
 ### Conversión de audio automática
 - MP3, FLAC, OGG, AIFF, M4A y WAV de cualquier frecuencia, resolución y número de
@@ -93,7 +109,7 @@ cargo install --path crates/jamman-cli
 ## Interfaz gráfica
 
 ```bash
-jamman-gui                      # abre la tarjeta si solo hay una conectada
+jamman-gui                      # abre la tarjeta si solo hay una; si no hay, el pedal
 jamman-gui /ruta/a/la/tarjeta   # abre esa tarjeta (o su carpeta JamManStereo)
 ```
 
@@ -121,12 +137,27 @@ jamman card init <punto-de-montaje>                      # prepara una tarjeta v
 `<tarjeta>` es el punto de montaje (en Linux, p. ej. `/run/media/$USER/ETIQUETA`;
 en Windows, `E:\`). Sin instalar, usa `cargo run --release -p jamman-cli -- card …`.
 
-### Pedal por USB (experimental, sin validar)
+### Pedal por USB
+
+`<almacén>` es `interna` (memoria del pedal) o `tarjeta` (la SD puesta en el
+pedal). El pedal se busca solo; con `--port /dev/ttyACM0` (o `COM3`) se elige.
+
+```bash
+jamman pedal ls <almacén>                                # lista los bucles
+jamman pedal add <almacén> cancion.mp3 [--slot 5] [--name "…"] [--normalize]
+jamman pedal export <almacén> 5 copia.wav
+jamman pedal rm <almacén> 5                              # pide confirmación (o --yes)
+jamman pedal backup <almacén> <carpeta>                  # copia todo a una carpeta
+jamman pedal restore <carpeta> <almacén>                 # la sube a las posiciones libres
+```
+
+Herramientas de bajo nivel, para depurar el protocolo:
 
 ```bash
 jamman ports              # busca el pedal (USB 1210:0020)
 jamman who-am-i           # identificación
-jamman ls /               # lista una carpeta del pedal
+jamman ls /mnt/nandfs     # lista una carpeta del pedal
+jamman info <ruta>
 jamman get <ruta> <destino>
 ```
 
@@ -168,11 +199,10 @@ original, y lo **opcional**.
 
 | # | Qué falta | Por qué importa |
 |---|---|---|
-| 1 | **Comprobar en el pedal un bucle escrito por la app.** | Todo el formato se ha contrastado con bucles escritos por el software original, pero no consta que el pedal haya cargado uno generado por esta app. Prueba mínima: meter la tarjeta en el pedal y comprobar que el bucle aparece en su posición, suena a su velocidad y respeta tempo, compás, parada y ritmo. |
-| 2 | **Escritura segura en FAT.** Solo el audio se sincroniza (`sync_all`); `patch.xml`, `phrase.xml` y el renombrado de la carpeta no. La GUI solo *recuerda* expulsar la tarjeta. | Si se saca la tarjeta justo después de importar, puede quedar un bucle sin XML o sin carpeta. Hace falta sincronizar ficheros y carpeta al terminar, y un botón de **expulsión segura** (Linux: `udisks`; Windows: expulsar volumen). |
-| 3 | **Comprobar el espacio antes de copiar** y **limpiar restos** `.tmp-PatchNN`. | Hoy la tarjeta llena se detecta al fallar la copia (no queda nada a medias, pero se pierde tiempo copiando decenas de MB). El original avisa antes («not enough space on external storage…»). Un corte de corriente deja carpetas temporales que no se limpian al abrir la tarjeta. |
-| 4 | **Tarjetas nuevas o recién formateadas.** | El análisis del original muestra que **nunca accede a la tarjeta directamente** (no usa ninguna función para listar unidades): solo la ve a través del pedal por USB, así que la carpeta `JamManStereo` la crea el pedal. Nuestra GUI solo detecta tarjetas que ya la tienen; con una vacía hay que usar `jamman card init` (no existe en la GUI). Que el pedal acepte una carpeta creada por nosotros hay que probarlo con una tarjeta vacía. Además la tarjeta debe ser FAT32/SDHC (hasta 32 GB); exFAT no la lee el pedal: conviene avisarlo. |
-| 5 | **Windows: compilación y pruebas.** No hay integración continua y no consta que la GUI se haya compilado y probado en Windows (detección de unidades `A:`–`Z:`, rutas, audio). | Es un objetivo del proyecto. Falta un flujo de GitHub Actions para Linux y Windows y una prueba manual con una tarjeta real. |
+| 1 | **Escritura segura en FAT.** Solo el audio se sincroniza (`sync_all`); `patch.xml`, `phrase.xml` y el renombrado de la carpeta no. La GUI solo *recuerda* expulsar la tarjeta. | Si se saca la tarjeta justo después de importar, puede quedar un bucle sin XML o sin carpeta. Hace falta sincronizar ficheros y carpeta al terminar, y un botón de **expulsión segura** (Linux: `udisks`; Windows: expulsar volumen). |
+| 2 | **Comprobar el espacio antes de copiar** y **limpiar restos** `.tmp-PatchNN`. | Hoy la tarjeta llena se detecta al fallar la copia (no queda nada a medias, pero se pierde tiempo copiando decenas de MB). El original avisa antes («not enough space on external storage…»). Un corte de corriente deja carpetas temporales que no se limpian al abrir la tarjeta. |
+| 3 | **Tarjetas nuevas o recién formateadas.** | El análisis del original muestra que **nunca accede a la tarjeta directamente** (no usa ninguna función para listar unidades): solo la ve a través del pedal por USB, así que la carpeta `JamManStereo` la crea el pedal. Nuestra GUI solo detecta tarjetas que ya la tienen; con una vacía hay que usar `jamman card init` (no existe en la GUI). Que el pedal acepte una carpeta creada por nosotros hay que probarlo con una tarjeta vacía. Además la tarjeta debe ser FAT32/SDHC (hasta 32 GB); exFAT no la lee el pedal: conviene avisarlo. |
+| 4 | **Windows: compilación y pruebas.** No hay integración continua y no consta que la GUI se haya compilado y probado en Windows (detección de unidades `A:`–`Z:`, rutas, audio). | Es un objetivo del proyecto. Falta un flujo de GitHub Actions para Linux y Windows y una prueba manual con una tarjeta real. |
 
 ### 🟡 Importante (buen funcionamiento y paridad con el original)
 
@@ -190,7 +220,8 @@ original, y lo **opcional**.
 
 | Qué falta | Notas |
 |---|---|
-| **Pedal por USB** (memoria interna, leer y escribir bucles) | El protocolo está implementado pero **sin validar con el pedal**. No hace falta para trabajar con la tarjeta; solo para la memoria interna. Pendientes: raíz del sistema de ficheros, modo de apertura para escribir, mensajes asíncronos y propiedades (ver [docs/03-protocolo.md](docs/03-protocolo.md)). |
+| **Pedal por USB: probar en el pedal** restaurar, borrar y editar ajustes | Listar, añadir, exportar y copia de seguridad están probados con el pedal; el resto solo con el pedal simulado de los tests. |
+| **Pedal por USB: mensajes asíncronos y propiedades** | El pedal envía avisos (p. ej. al cambiar de bucle) que hoy se descartan. Servirían para refrescar la lista sola. |
 | **Biblioteca local** (JamLists, valoración y búsqueda persistentes) y diálogo de **sincronización** con la tarjeta | El original guarda una base SQLite. El explorador del equipo cubre lo básico. |
 | **Detección automática de tempo** | El pedal mide el tempo al grabar (`BpmValidated` en `phrase.xml`). Si el original hace algo parecido al importar está por confirmar (🔍). |
 | **Idioma y preferencias**, **instaladores** (AppImage, `.deb`, `.msi`) | |

@@ -109,11 +109,16 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
 fn footer(app: &mut JamApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     let selected = app.browser.selection.len();
+    let target = if app.lib.pedal().is_some() {
+        "al pedal"
+    } else {
+        "a la tarjeta"
+    };
     ui.horizontal(|ui| {
         let label = if selected == 0 {
-            "➡ Añadir a la tarjeta".to_owned()
+            format!("➡ Añadir {target}")
         } else {
-            format!("➡ Añadir a la tarjeta ({selected})")
+            format!("➡ Añadir {target} ({selected})")
         };
         let button = egui::Button::new(RichText::new(label).strong());
         if ui
@@ -121,8 +126,10 @@ fn footer(app: &mut JamApp, ui: &mut egui::Ui) {
                 app.can_transfer() && !app.browser.selection.is_empty(),
                 button,
             )
-            .on_hover_text("Convierte y copia a la tarjeta lo seleccionado (ficheros o carpetas)")
-            .on_disabled_hover_text("Selecciona canciones y abre una tarjeta")
+            .on_hover_text(format!(
+                "Convierte y copia {target} lo seleccionado (ficheros o carpetas)"
+            ))
+            .on_disabled_hover_text("Selecciona canciones y abre una tarjeta o el pedal")
             .clicked()
         {
             app.import_from_browser(ui.ctx());

@@ -32,7 +32,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
             egui::widgets::global_theme_preference_buttons(ui);
             ui.add(
                 egui::TextEdit::singleline(&mut app.lib.filter)
-                    .hint_text("🔍 Buscar en la tarjeta…")
+                    .hint_text("🔍 Buscar bucles…")
                     .desired_width(240.0),
             );
         });

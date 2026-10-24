@@ -105,9 +105,9 @@ fn paint_drop_hint(app: &JamApp, ctx: &egui::Context) {
     let rect = ctx.content_rect();
     painter.rect_filled(rect, 0.0, Color32::from_black_alpha(190));
     let text = if app.lib.card().is_some() {
-        "Suelta las canciones para añadirlas a la tarjeta"
+        "Suelta las canciones para añadirlas"
     } else {
-        "Abre primero una tarjeta"
+        "Abre primero una tarjeta o el pedal"
     };
     painter.text(
         rect.center(),

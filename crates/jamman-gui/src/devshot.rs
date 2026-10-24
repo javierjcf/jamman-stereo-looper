@@ -4,7 +4,8 @@
 //! la app guarda su ventana como imagen PPM y se cierra. Con
 //! `JAMMAN_SCREENSHOT_SLOT=N` selecciona antes el bucle `N`, con
 //! `JAMMAN_SCREENSHOT_THEME=light|dark` fuerza el tema y con
-//! `JAMMAN_SCREENSHOT_BROWSER=carpeta` abre esa carpeta en el explorador. Sirve para
+//! `JAMMAN_SCREENSHOT_BROWSER=carpeta` abre esa carpeta en el explorador y con
+//! `JAMMAN_SCREENSHOT_WAIT=segundos` cambia la espera (por defecto 5 s). Sirve para
 //! revisar el diseño y generar las capturas del README:
 //!
 //! ```text
@@ -31,6 +32,7 @@ pub struct DevShot {
     /// Carpeta que se abre en el explorador.
     pub browser_dir: Option<PathBuf>,
     started: Instant,
+    wait: Duration,
     requested: bool,
     done: Arc<AtomicBool>,
 }
@@ -46,6 +48,10 @@ impl DevShot {
                 .and_then(|s| s.parse().ok()),
             browser_dir: std::env::var_os("JAMMAN_SCREENSHOT_BROWSER").map(PathBuf::from),
             started: Instant::now(),
+            wait: std::env::var("JAMMAN_SCREENSHOT_WAIT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .map_or(WARMUP, Duration::from_secs),
             requested: false,
             done: Arc::new(AtomicBool::new(false)),
         })
@@ -58,7 +64,7 @@ impl DevShot {
             return;
         }
         ctx.request_repaint();
-        if self.started.elapsed() < WARMUP {
+        if self.started.elapsed() < self.wait {
             return;
         }
         if !self.requested {

@@ -50,6 +50,9 @@ pub enum Error {
     InvalidSetting(String),
     /// La posición tiene ajustes guardados pero ningún audio grabado.
     MissingAudio(u8),
+    /// Lo leído directamente de la tarjeta no es lo que se escribió en ese
+    /// fichero: la tarjeta parece averiada (ver [`crate::card::verify`]).
+    WriteNotPersisted(std::path::PathBuf),
     /// No hay espacio libre suficiente para copiar.
     NoSpace {
         /// Bytes que se necesitan.
@@ -126,6 +129,12 @@ impl fmt::Display for Error {
             Self::MissingAudio(n) => write!(
                 f,
                 "la posición {n} tiene ajustes guardados pero ningún audio grabado"
+            ),
+            Self::WriteNotPersisted(p) => write!(
+                f,
+                "la tarjeta parece averiada: no guarda lo que se escribe ({} no contiene lo \
+                 que se copió al leerlo directamente de la tarjeta). Prueba con otra tarjeta",
+                p.display()
             ),
             Self::NoSpace { needed, free } => write!(
                 f,

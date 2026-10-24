@@ -16,6 +16,7 @@ pub mod meta;
 pub mod options;
 #[cfg(test)]
 pub(crate) mod testutil;
+pub mod verify;
 pub mod wav;
 pub(crate) mod xml;
 

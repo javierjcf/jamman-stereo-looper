@@ -74,6 +74,13 @@ pub trait LoopStore {
     fn space(&mut self) -> Result<Option<(u64, u64)>> {
         Ok(None)
     }
+
+    /// Comprueba que un bucle recién escrito, cuyo audio sale de
+    /// `audio_source`, está de verdad en el almacén. Solo la tarjeta del PC
+    /// puede leerse sin caché (ver [`crate::card::verify`]); el pedal, no.
+    fn verify_loop(&mut self, _slot: Slot, _audio_source: &Path) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl LoopStore for Card {
@@ -134,6 +141,10 @@ impl LoopStore for Card {
         progress: Progress,
     ) -> Result<()> {
         Card::restore_loop(self, source, source_slot, slot, progress)
+    }
+
+    fn verify_loop(&mut self, slot: Slot, audio_source: &Path) -> Result<()> {
+        Card::verify_loop(self, slot, audio_source)
     }
 }
 

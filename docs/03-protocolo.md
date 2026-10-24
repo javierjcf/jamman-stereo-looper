@@ -17,6 +17,35 @@ El código Rust de [`protocol/`](../crates/jamman-core/src/protocol) implementa
 todo lo de este documento y marca en la documentación de cada campo lo que es
 hipótesis.
 
+## 0. Validación con el pedal (24/10/2026)
+
+Probado con un JamMan Stereo real conectado por USB a Linux:
+
+| Dato | Resultado |
+|---|---|
+| Dispositivo `1210:0020` → `/dev/ttyACM0` (`cdc_acm`) | ✅ |
+| Cabecera: el campo de longitud **incluye los 4 bytes de la serie** | ✅ corregido (antes se suponía solo la carga) |
+| `WhoAmI` → `[93, 3, 1, 4864]`, GUID del aparato y «JamMan Stereo» | ✅ |
+| `FolderContents`: primera lista ficheros, segunda carpetas | ✅ |
+| `EntryInfo`: el primer byte es el tipo (0 fichero, 1 carpeta); el byte tras el nombre es «existe»; si el tipo no coincide, el pedal responde con error | ✅ |
+| Fechas: el mes empieza en 0 | ✅ |
+| `FileOpen` lectura `[1,1]`; escritura `[2,0]` crea o vacía el fichero | ✅ |
+| `FileRead`/`FileWrite` por bloques de 8169 bytes; 25 MB a ~1,85 MB/s, íntegros | ✅ |
+| `EntryCreate` carpeta `[1, ruta, 1]` | ✅ |
+| `EntryDelete` `[tipo, ruta, 1, 0]`: borra ficheros y carpetas **con su contenido** | ✅ |
+| Mensajes asíncronos (`0x8006`) aparecen solos; se descartan sin perder la sincronía | ✅ |
+
+**Sistema de ficheros del pedal** (tipo Unix):
+
+```
+/mnt/nandfs/JamManStereo/PatchNN/…   memoria interna (NAND)
+/mnt/sdfs/JamManStereo/PatchNN/…     tarjeta SD insertada en el pedal
+```
+
+La estructura de cada bucle es la misma que en la tarjeta leída desde el PC
+(`patch.xml`, `PhraseA/phrase.wav`, `PhraseA/phrase.xml`). Una posición con
+ajustes guardados pero sin grabar tiene `phrase.xml` y no `phrase.wav`.
+
 ## 1. Transporte
 
 | Dato | Valor | Certeza |

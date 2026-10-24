@@ -11,6 +11,7 @@ use std::fs;
 use std::process::ExitCode;
 
 use jamman_core::protocol::Client;
+use jamman_core::protocol::request::EntryKind;
 use jamman_core::{audio, device};
 
 use args::take_option;
@@ -68,15 +69,19 @@ fn run() -> Result<(), Box<dyn Error>> {
             println!("texto: {:?}", info.texts);
         }
         ("info", [path]) => {
-            let info = connect(port_name)?.entry_info(path)?;
+            let mut client = connect(port_name)?;
+            // Si se pregunta por un fichero y es una carpeta, el pedal responde
+            // con error («Entry type does not match»): se prueba como carpeta.
+            let info = match client.entry_info(path, EntryKind::File) {
+                Ok(info) if info.exists => info,
+                _ => client.entry_info(path, EntryKind::Folder)?,
+            };
             println!("{info:#?}");
         }
         ("ls", [path]) => {
-            let (first, second) = connect(port_name)?.folder_contents(path)?;
-            println!("lista 1 ({}):", first.len());
-            first.iter().for_each(|n| println!("  {n}"));
-            println!("lista 2 ({}):", second.len());
-            second.iter().for_each(|n| println!("  {n}"));
+            let (files, folders) = connect(port_name)?.folder_contents(path)?;
+            folders.iter().for_each(|n| println!("📁 {n}/"));
+            files.iter().for_each(|n| println!("   {n}"));
         }
         ("get", [remote, local]) => {
             let data = connect(port_name)?.download(remote)?;

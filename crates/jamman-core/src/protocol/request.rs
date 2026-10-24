@@ -38,18 +38,35 @@ pub mod message_type {
     pub const FOLDER_CONTENTS: u16 = 17;
 }
 
-/// Modo de apertura de un fichero remoto.
+/// Modo de apertura de un fichero remoto (dos bytes en el cable).
 ///
-/// El original envía dos bytes. Para lectura se han observado `[1, 1]`
-/// (`WavLength` y descarga). Para escritura el valor `[2, 0]` es una
-/// **hipótesis** deducida de la fórmula del serializador; falta validarlo con
-/// el pedal.
+/// Validado con el pedal: `[1, 1]` abre para leer y `[2, 0]` crea el fichero
+/// si no existe, lo vacía y lo abre para escribir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenMode {
     /// Abrir para leer.
     Read,
-    /// Abrir para escribir (hipótesis, sin validar).
+    /// Crear o vaciar y abrir para escribir.
     Write,
+}
+
+/// Tipo de entrada del sistema de ficheros del pedal (primer byte de las
+/// peticiones de información, creación y borrado; validado con el pedal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Fichero.
+    File,
+    /// Carpeta.
+    Folder,
+}
+
+impl EntryKind {
+    fn byte(self) -> u8 {
+        match self {
+            Self::File => 0,
+            Self::Folder => 1,
+        }
+    }
 }
 
 impl OpenMode {
@@ -66,23 +83,29 @@ impl OpenMode {
 pub enum Request {
     /// Pide la identificación del dispositivo. Carga vacía.
     WhoAmI,
-    /// Información de un fichero o carpeta. `flag` es un byte cuyo significado
-    /// se desconoce (el original lo recibe como parámetro).
+    /// Información de un fichero o carpeta. Si el tipo no coincide con el de
+    /// la entrada, el pedal responde con error.
     EntryInfo {
         /// Ruta en el sistema de ficheros del pedal.
         path: String,
-        /// Byte previo a la ruta, de significado desconocido.
-        flag: u8,
+        /// Tipo de entrada por el que se pregunta.
+        kind: EntryKind,
     },
-    /// Crea una entrada. El original envía siempre los bytes `1` y `1`.
+    /// Crea una entrada (validado para carpetas; los ficheros se crean al
+    /// abrirlos para escribir). Último byte fijo `1`, como el original.
     EntryCreate {
         /// Ruta a crear.
         path: String,
+        /// Tipo de entrada.
+        kind: EntryKind,
     },
-    /// Borra una entrada. El original envía siempre los bytes `1`, `1`, `0`.
+    /// Borra una entrada. Una carpeta se borra con todo su contenido.
+    /// Bytes finales fijos `1, 0`, como el original.
     EntryDelete {
         /// Ruta a borrar.
         path: String,
+        /// Tipo de entrada.
+        kind: EntryKind,
     },
     /// Abre un fichero y devuelve un manejador de 64 bits.
     FileOpen {
@@ -154,17 +177,17 @@ impl Request {
         let mut w = Writer::new();
         match self {
             Self::WhoAmI => {}
-            Self::EntryInfo { path, flag } => {
+            Self::EntryInfo { path, kind } => {
                 check_path(path)?;
-                w.u8(*flag).string(path);
+                w.u8(kind.byte()).string(path);
             }
-            Self::EntryCreate { path } => {
+            Self::EntryCreate { path, kind } => {
                 check_path(path)?;
-                w.u8(1).string(path).u8(1);
+                w.u8(kind.byte()).string(path).u8(1);
             }
-            Self::EntryDelete { path } => {
+            Self::EntryDelete { path, kind } => {
                 check_path(path)?;
-                w.u8(1).string(path).u8(1).u8(0);
+                w.u8(kind.byte()).string(path).u8(1).u8(0);
             }
             Self::FileOpen { path, mode } => {
                 check_path(path)?;
@@ -243,10 +266,10 @@ mod tests {
     }
 
     #[test]
-    fn entry_info_is_flag_then_string() {
+    fn entry_info_is_kind_then_string() {
         let frame = Request::EntryInfo {
             path: "/a".into(),
-            flag: 1,
+            kind: EntryKind::Folder,
         }
         .encode(0)
         .unwrap();
@@ -272,8 +295,18 @@ mod tests {
 
     #[test]
     fn create_and_delete_payload_sizes_match_the_original() {
-        let create = Request::EntryCreate { path: "x".into() }.encode(0).unwrap();
-        let delete = Request::EntryDelete { path: "x".into() }.encode(0).unwrap();
+        let create = Request::EntryCreate {
+            path: "x".into(),
+            kind: EntryKind::Folder,
+        }
+        .encode(0)
+        .unwrap();
+        let delete = Request::EntryDelete {
+            path: "x".into(),
+            kind: EntryKind::Folder,
+        }
+        .encode(0)
+        .unwrap();
         assert_eq!(split(&create).0.payload_len, 7); // ruta + 6
         assert_eq!(split(&delete).0.payload_len, 8); // ruta + 7
         assert_eq!(split(&create).0.message_type, 7);

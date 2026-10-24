@@ -30,19 +30,19 @@ pub mod message_type {
 
 /// Fecha y hora como las envía el pedal: año (`u16`) y cuatro bytes con signo.
 ///
-/// El orden mes, día, hora, minuto es una hipótesis (el original las pasa en
-/// ese orden al constructor de fecha).
+/// Validado con un fichero creado el 22 de octubre: llega como mes 9, así que
+/// **el mes empieza en 0** (como `struct tm` en C).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp {
     /// Año.
     pub year: u16,
-    /// Mes (hipótesis).
+    /// Mes, de 0 (enero) a 11.
     pub month: i8,
-    /// Día (hipótesis).
+    /// Día del mes.
     pub day: i8,
-    /// Hora (hipótesis).
+    /// Hora.
     pub hour: i8,
-    /// Minuto (hipótesis).
+    /// Minuto.
     pub minute: i8,
 }
 
@@ -61,31 +61,34 @@ impl Timestamp {
 /// Identificación del dispositivo (`WhoAmIResponse`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoAmI {
-    /// Cuatro valores de 16 bits cuyo significado se desconoce (probablemente
-    /// identificadores y versión de hardware).
+    /// Cuatro valores de 16 bits de significado desconocido. Un JamMan Stereo
+    /// real devuelve `[93, 3, 1, 4864]` (posiblemente versiones).
     pub ids: [u16; 4],
-    /// Dos cadenas de texto (probablemente nombre y versión de firmware).
+    /// Identificador único (GUID) del aparato y nombre del modelo
+    /// («JamMan Stereo»). Validado con el pedal.
     pub texts: [String; 2],
 }
 
 /// Información de una entrada del sistema de ficheros del pedal.
 ///
-/// Todos los campos salvo `name` y `size` tienen un significado sin confirmar.
+/// Validados con el pedal: `kind`, `name`, `exists`, `size` y las fechas. El
+/// resto de bytes tiene un significado desconocido.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryInfo {
-    /// Primer byte (hipótesis: tipo de entrada).
+    /// Tipo por el que se preguntó (0 fichero, 1 carpeta).
     pub kind: u8,
-    /// Nombre de la entrada.
+    /// Ruta completa de la entrada.
     pub name: String,
-    /// Byte tras el nombre (hipótesis: atributos).
-    pub flags: u8,
-    /// Tamaño en bytes (hipótesis).
+    /// `true` si la entrada existe.
+    pub exists: bool,
+    /// Tamaño en bytes (0 si no existe o es una carpeta).
     pub size: i64,
     /// `true` si el byte original era `0` (hipótesis: no es solo lectura).
     pub zero_flag: bool,
     /// Último byte antes de las fechas, de significado desconocido.
     pub extra: u8,
-    /// Tres fechas (hipótesis: creación, modificación y acceso).
+    /// Tres fechas (probablemente creación, modificación y acceso; la tercera
+    /// llega sin hora).
     pub times: [Timestamp; 3],
 }
 
@@ -103,13 +106,12 @@ pub enum Response {
     WhoAmI(WhoAmI),
     /// Información de una entrada.
     EntryInfo(EntryInfo),
-    /// Contenido de una carpeta. El original guarda dos listas de cadenas;
-    /// cuál es de ficheros y cuál de carpetas está por confirmar.
+    /// Contenido de una carpeta (validado con el pedal).
     FolderContents {
-        /// Primera lista.
-        first: Vec<String>,
-        /// Segunda lista.
-        second: Vec<String>,
+        /// Ficheros.
+        files: Vec<String>,
+        /// Subcarpetas.
+        folders: Vec<String>,
     },
     /// Fichero abierto.
     FileOpen {
@@ -118,8 +120,8 @@ pub enum Response {
         /// Tamaño del fichero en bytes.
         size: i64,
     },
-    /// Datos leídos. El campo `position` (hipótesis) es un `i64` previo a la
-    /// longitud; los datos siguen a la longitud (hipótesis).
+    /// Datos leídos: un `i64` (manejador o posición, sin confirmar), la
+    /// longitud y los datos (validado con el pedal).
     FileRead {
         /// `i64` que precede a la longitud.
         position: i64,
@@ -166,7 +168,7 @@ impl Response {
             message_type::ENTRY_INFO => {
                 let kind = r.u8()?;
                 let name = r.string()?;
-                let flags = r.u8()?;
+                let exists = r.u8()? != 0;
                 let size = r.i64()?;
                 let zero_flag = r.u8()? == 0;
                 let extra = r.u8()?;
@@ -178,7 +180,7 @@ impl Response {
                 Ok(Self::EntryInfo(EntryInfo {
                     kind,
                     name,
-                    flags,
+                    exists,
                     size,
                     zero_flag,
                     extra,
@@ -186,9 +188,9 @@ impl Response {
                 }))
             }
             message_type::FOLDER_CONTENTS => {
-                let first = read_string_list(&mut r)?;
-                let second = read_string_list(&mut r)?;
-                Ok(Self::FolderContents { first, second })
+                let files = read_string_list(&mut r)?;
+                let folders = read_string_list(&mut r)?;
+                Ok(Self::FolderContents { files, folders })
             }
             message_type::FILE_OPEN => Ok(Self::FileOpen {
                 handle: r.i64()?,
@@ -285,8 +287,8 @@ mod tests {
         assert_eq!(
             Response::parse(&header(0x12), &w.into_vec()).unwrap(),
             Response::FolderContents {
-                first: vec!["a.wav".into(), "b.wav".into()],
-                second: vec!["PhraseA".into()],
+                files: vec!["a.wav".into(), "b.wav".into()],
+                folders: vec!["PhraseA".into()],
             }
         );
     }

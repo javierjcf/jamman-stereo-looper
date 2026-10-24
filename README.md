@@ -23,6 +23,15 @@ Funciona de dos formas:
 
 ### Tarjeta SD
 - Detecta sola la tarjeta del JamMan al conectarla (o se abre cualquier carpeta).
+- Detecta también las **unidades vacías** montadas: **✨ Preparar** crea la
+  carpeta `JamManStereo` tras pedir confirmación. No se borra ni se formatea
+  nada.
+- **Avisa si el pedal no podrá leer la tarjeta**: si no es FAT32 (exFAT, NTFS…)
+  o tiene más de 32 GB, y explica cómo formatearla en el propio pedal
+  (Shift + mantener Delete 4 s → «FO» → Delete → «F?» → mantener Delete 2 s →
+  «Bu»; si muestra «nF», lo mismo con Store). La app nunca formatea. El tipo de
+  sistema de ficheros solo se lee en Linux; en Windows y macOS solo se avisa
+  por la capacidad.
 - Muestra las posiciones ocupadas (de 99), el espacio libre y cuántos minutos de
   audio caben todavía.
 - Lista los bucles con número, nombre, duración, tempo, bucle o una vez, ritmo,
@@ -90,6 +99,11 @@ Con los ajustes que describe el manual del pedal:
   inválido, tarjeta llena) no deja nada a medias.
 - Al editar se conserva todo lo que no se toca, incluidos los bucles grabados en
   el propio pedal.
+- **Comprueba lo copiado**: tras añadir o restaurar bucles, relee el audio y
+  los XML **directamente de la tarjeta**, sin la caché del sistema (Linux:
+  `O_DIRECT`; Windows: `FILE_FLAG_NO_BUFFERING`; macOS: sincroniza y relee). Si
+  no coincide, avisa de que la tarjeta parece averiada: hay tarjetas que dan
+  las escrituras por buenas sin guardarlas.
 - Recuerda **expulsar la tarjeta** antes de sacarla del ordenador.
 
 ### Otros
@@ -213,7 +227,7 @@ original, y lo **opcional**.
 |---|---|---|
 | 1 | **Escritura segura en FAT.** Solo el audio se sincroniza (`sync_all`); `patch.xml`, `phrase.xml` y el renombrado de la carpeta no. La GUI solo *recuerda* expulsar la tarjeta. | Si se saca la tarjeta justo después de importar, puede quedar un bucle sin XML o sin carpeta. Hace falta sincronizar ficheros y carpeta al terminar, y un botón de **expulsión segura** (Linux: `udisks`; Windows: expulsar volumen). |
 | 2 | **Comprobar el espacio antes de copiar** y **limpiar restos** `.tmp-PatchNN`. | Hoy la tarjeta llena se detecta al fallar la copia (no queda nada a medias, pero se pierde tiempo copiando decenas de MB). El original avisa antes («not enough space on external storage…»). Un corte de corriente deja carpetas temporales que no se limpian al abrir la tarjeta. |
-| 3 | **Tarjetas nuevas o recién formateadas.** | El análisis del original muestra que **nunca accede a la tarjeta directamente** (no usa ninguna función para listar unidades): solo la ve a través del pedal por USB, así que la carpeta `JamManStereo` la crea el pedal. Nuestra GUI solo detecta tarjetas que ya la tienen; con una vacía hay que usar `jamman card init` (no existe en la GUI). Que el pedal acepte una carpeta creada por nosotros hay que probarlo con una tarjeta vacía. Además la tarjeta debe ser FAT32/SDHC (hasta 32 GB); exFAT no la lee el pedal: conviene avisarlo. |
+| 3 | **Tarjetas nuevas o recién formateadas: probar con el pedal.** 🔍 | El original nunca accede a la tarjeta directamente: la carpeta `JamManStereo` la crea el pedal. La GUI ya detecta unidades vacías y las prepara (**✨ Preparar**, como `jamman card init`) y avisa si la tarjeta no es FAT32 o pasa de 32 GB, con los pasos para formatearla en el pedal. Falta comprobar con una tarjeta vacía que el pedal acepta la carpeta creada por nosotros. El tipo de sistema de ficheros solo se detecta en Linux (`/proc/mounts`): en Windows (`GetVolumeInformationW`) y macOS (`statfs`) haría falta `unsafe`, prohibido en el proyecto, así que allí solo se avisa por la capacidad. |
 | 4 | **Windows: compilación y pruebas.** No hay integración continua y no consta que la GUI se haya compilado y probado en Windows (detección de unidades `A:`–`Z:`, rutas, audio). | Es un objetivo del proyecto. Falta un flujo de GitHub Actions para Linux y Windows y una prueba manual con una tarjeta real. |
 
 ### 🟡 Importante (buen funcionamiento y paridad con el original)

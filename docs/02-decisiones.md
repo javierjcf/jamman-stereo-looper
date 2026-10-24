@@ -150,3 +150,26 @@ duradero**; ninguna funcionalidad sin necesidad real.
 - Los errores del puerto son `Error::Connection`, distintos de los del disco
   (`Error::Io`): solo los primeros detienen una tanda.
 
+## D21. La app no formatea tarjetas; avisa, prepara y comprueba
+- **Nunca se formatea un disco**: habría que elegir el dispositivo y es fácil
+  equivocarse (p. ej. `/boot` es un FAT de 2 GB), requiere permisos de
+  administrador y el propio pedal lo hace. Si la tarjeta no es FAT32 o pasa de
+  32 GB (SDHC), se muestran los pasos del manual para formatearla en el pedal.
+- El tipo de sistema de ficheros se lee de `/proc/mounts` (solo Linux). En
+  Windows y macOS haría falta `unsafe` (`GetVolumeInformationW`, `statfs`),
+  prohibido en el proyecto: allí solo se avisa por la capacidad. No se
+  comprueban carpetas que no son la raíz de una unidad (copias de seguridad).
+- **Preparar** una unidad vacía solo crea `JamManStereo/`, tras confirmarlo, y
+  solo se ofrece para puntos de montaje reales (en Linux, los de
+  `/proc/mounts`) sin más contenido que el que crea el sistema.
+- **Comprobar lo copiado** (`card::verify`): se encontró una tarjeta averiada
+  en la que Linux daba las escrituras por buenas y la relectura normal también
+  (venía de la caché), pero `dd iflag=direct` mostraba que el contenido nuevo
+  no estaba. Tras importar o restaurar se relee sin caché (`O_DIRECT` en
+  Linux, `FILE_FLAG_NO_BUFFERING` en Windows, en bloques alineados a 4096 sin
+  `unsafe`); donde no se puede (macOS, `tmpfs`) se sincroniza y se relee. El
+  audio se compara con el WAV copiado y los XML con lo recién escrito. Cuesta
+  releer cada bucle una vez; a cambio, una tarjeta averiada se detecta al
+  copiar y no al ir a tocar.
+- Dependencia nueva solo en Linux: `libc`, por la constante `O_DIRECT`, que
+  cambia según la arquitectura.

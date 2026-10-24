@@ -166,12 +166,18 @@ fn add(
 }
 
 fn remove(store: &mut Store, slot: Slot, yes: bool) -> Result<(), Box<dyn Error>> {
-    let e = store.read(slot)?;
+    // Un bucle dañado (XML ilegible) también se tiene que poder borrar.
+    let name = match store.read(slot) {
+        Ok(e) => format!("{:?}", e.patch.name),
+        Err(jamman_core::Error::SlotNotFound(n)) => {
+            return Err(format!("la posición {n} está vacía").into());
+        }
+        Err(e) => format!("(dañado: {e})"),
+    };
     if !yes {
         print!(
-            "¿Borrar del pedal el bucle {:02} {:?}? No se puede deshacer. [s/N] ",
+            "¿Borrar del pedal el bucle {:02} {name}? No se puede deshacer. [s/N] ",
             slot.get(),
-            e.patch.name
         );
         io::stdout().flush()?;
         let mut answer = String::new();

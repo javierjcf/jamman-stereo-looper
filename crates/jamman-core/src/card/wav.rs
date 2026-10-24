@@ -141,6 +141,29 @@ pub fn read_info<R: Read + Seek>(r: &mut R) -> Result<WavInfo> {
     Err(Error::InvalidWav("falta el bloque data"))
 }
 
+/// Interpreta la cabecera de un WAV a partir de sus primeros bytes y del
+/// tamaño real del fichero. Sirve cuando el fichero está en el pedal y solo se
+/// descarga el principio.
+pub fn parse_header(head: &[u8], file_len: u64) -> Result<WavInfo> {
+    let mut info = read_info(&mut std::io::Cursor::new(head))?;
+    // `read_info` recorta los datos a lo leído: se corrige con el tamaño real.
+    let declared = data_declared_len(head, info.data_offset)?;
+    info.data_len = declared.min(file_len.saturating_sub(info.data_offset));
+    Ok(info)
+}
+
+/// Longitud declarada en el bloque `data` que empieza en `data_offset`.
+fn data_declared_len(head: &[u8], data_offset: u64) -> Result<u64> {
+    let at = (data_offset as usize)
+        .checked_sub(4)
+        .ok_or(Error::InvalidWav("cabecera truncada"))?;
+    let bytes: [u8; 4] = head
+        .get(at..at + 4)
+        .and_then(|b| b.try_into().ok())
+        .ok_or(Error::InvalidWav("cabecera truncada"))?;
+    Ok(u64::from(u32::from_le_bytes(bytes)))
+}
+
 fn read_exact<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<()> {
     r.read_exact(buf).map_err(|e| match e.kind() {
         std::io::ErrorKind::UnexpectedEof => Error::InvalidWav("fichero truncado"),
@@ -189,6 +212,17 @@ mod tests {
         let mut bytes = wav_bytes(2, 44_100, 16, &[0; 100], false);
         bytes.truncate(44 + 40);
         assert_eq!(info(bytes).unwrap().data_len, 40);
+    }
+
+    #[test]
+    fn header_from_the_first_bytes_uses_the_real_file_length() {
+        let full = wav_bytes(2, 44_100, 16, &[0; 1000], true);
+        let info = parse_header(&full[..80], full.len() as u64).unwrap();
+        assert_eq!(info.data_len, 1000);
+        assert_eq!(info.data_offset, 58);
+        // Si el fichero real es más corto que lo declarado, se recorta.
+        let info = parse_header(&full[..80], 58 + 10).unwrap();
+        assert_eq!(info.data_len, 10);
     }
 
     #[test]

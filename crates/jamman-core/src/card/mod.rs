@@ -32,10 +32,10 @@ pub use wav::WavInfo;
 /// Nombre de la carpeta raíz del JamMan en la tarjeta.
 pub const CARD_DIR: &str = "JamManStereo";
 
-const PHRASE_DIR: &str = "PhraseA";
-const PATCH_FILE: &str = "patch.xml";
-const PHRASE_FILE: &str = "phrase.xml";
-const AUDIO_FILE: &str = "phrase.wav";
+pub(crate) const PHRASE_DIR: &str = "PhraseA";
+pub(crate) const PATCH_FILE: &str = "patch.xml";
+pub(crate) const PHRASE_FILE: &str = "phrase.xml";
+pub(crate) const AUDIO_FILE: &str = "phrase.wav";
 const TMP_PREFIX: &str = ".tmp-";
 
 /// Un bucle de la tarjeta, ya leído.
@@ -157,6 +157,60 @@ fn set_all(mut doc: String, file: &str, fields: &[(&str, String, &str)]) -> Resu
     Ok(doc)
 }
 
+/// Metadatos de un bucle nuevo importado desde `original` (fichero que eligió
+/// el usuario): GUID nuevo y descripción «Imported from …», como el original.
+pub(crate) fn imported_meta(name: &str, original: &Path) -> (PatchMeta, PhraseMeta) {
+    let id = uuid::Uuid::new_v4().to_string();
+    let file_name = original
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (
+        PatchMeta::imported(name, &format!("Imported from {file_name}"), &id),
+        PhraseMeta::imported(&id),
+    )
+}
+
+/// Aplica los ajustes a los textos de `patch.xml` y `phrase.xml`. Solo cambian
+/// las etiquetas afectadas; el resto queda intacto.
+pub(crate) fn apply_settings(
+    patch_doc: &str,
+    phrase_doc: &str,
+    s: &LoopSettings,
+) -> Result<(String, String)> {
+    s.validate()?;
+    let new_patch = set_all(
+        patch_doc.to_owned(),
+        PATCH_FILE,
+        &[
+            ("PatchName", s.name.clone(), "JamManPatch"),
+            ("RhythmType", s.rhythm_type.clone(), "JamManPatch"),
+            ("StopMode", s.stop_mode.clone(), "JamManPatch"),
+            ("Description", s.description.clone(), "Metadata"),
+            ("Artist", s.artist.clone(), "Metadata"),
+            ("Genre", s.genre.clone(), "Metadata"),
+            ("Rating", s.rating.to_string(), "Metadata"),
+            ("Tags", s.tags.clone(), "Metadata"),
+        ],
+    )?;
+    let flag = |b: bool| if b { "1" } else { "0" }.to_owned();
+    let new_phrase = set_all(
+        phrase_doc.to_owned(),
+        PHRASE_FILE,
+        &[
+            ("BeatsPerMinute", s.bpm.to_string(), "JamManPhrase"),
+            (
+                "BeatsPerMeasure",
+                s.beats_per_measure.to_string(),
+                "JamManPhrase",
+            ),
+            ("IsLoop", flag(s.is_loop), "JamManPhrase"),
+            ("IsReversed", flag(s.is_reversed), "JamManPhrase"),
+        ],
+    )?;
+    Ok((new_patch, new_phrase))
+}
+
 /// Resultado de leer una posición al listar la tarjeta. Un bucle dañado no
 /// impide ver el resto.
 #[derive(Debug)]
@@ -173,12 +227,12 @@ pub struct Card {
     root: PathBuf,
 }
 
-fn patch_dir_name(slot: Slot) -> String {
+pub(crate) fn patch_dir_name(slot: Slot) -> String {
     format!("Patch{:02}", slot.get())
 }
 
 /// Interpreta `PatchNN` como posición de bucle.
-fn slot_from_dir_name(name: &str) -> Option<Slot> {
+pub(crate) fn slot_from_dir_name(name: &str) -> Option<Slot> {
     let digits = name.strip_prefix("Patch")?;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -214,7 +268,7 @@ impl Card {
         &self.root
     }
 
-    fn patch_dir(&self, slot: Slot) -> PathBuf {
+    pub(crate) fn patch_dir(&self, slot: Slot) -> PathBuf {
         self.root.join(patch_dir_name(slot))
     }
 
@@ -296,13 +350,7 @@ impl Card {
         let mut input = File::open(source)?;
         wav::read_info(&mut input)?.check_pedal_format()?;
 
-        let id = uuid::Uuid::new_v4().to_string();
-        let file_name = original
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let patch = PatchMeta::imported(name, &format!("Imported from {file_name}"), &id);
-        let phrase = PhraseMeta::imported(&id);
+        let (patch, phrase) = imported_meta(name, original);
 
         let tmp = self
             .root
@@ -341,36 +389,7 @@ impl Card {
         let patch_doc = fs::read_to_string(&patch_path)?;
         let phrase_doc = fs::read_to_string(&phrase_path)?;
 
-        let s = settings;
-        let new_patch = set_all(
-            patch_doc.clone(),
-            PATCH_FILE,
-            &[
-                ("PatchName", s.name.clone(), "JamManPatch"),
-                ("RhythmType", s.rhythm_type.clone(), "JamManPatch"),
-                ("StopMode", s.stop_mode.clone(), "JamManPatch"),
-                ("Description", s.description.clone(), "Metadata"),
-                ("Artist", s.artist.clone(), "Metadata"),
-                ("Genre", s.genre.clone(), "Metadata"),
-                ("Rating", s.rating.to_string(), "Metadata"),
-                ("Tags", s.tags.clone(), "Metadata"),
-            ],
-        )?;
-        let flag = |b: bool| if b { "1" } else { "0" }.to_owned();
-        let new_phrase = set_all(
-            phrase_doc.clone(),
-            PHRASE_FILE,
-            &[
-                ("BeatsPerMinute", s.bpm.to_string(), "JamManPhrase"),
-                (
-                    "BeatsPerMeasure",
-                    s.beats_per_measure.to_string(),
-                    "JamManPhrase",
-                ),
-                ("IsLoop", flag(s.is_loop), "JamManPhrase"),
-                ("IsReversed", flag(s.is_reversed), "JamManPhrase"),
-            ],
-        )?;
+        let (new_patch, new_phrase) = apply_settings(&patch_doc, &phrase_doc, settings)?;
 
         if new_patch != patch_doc {
             fs::write(&patch_path, new_patch)?;

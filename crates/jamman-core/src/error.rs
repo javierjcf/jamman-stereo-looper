@@ -48,6 +48,8 @@ pub enum Error {
     InvalidMetadata(String),
     /// Un ajuste del bucle está fuera de rango.
     InvalidSetting(String),
+    /// La posición tiene ajustes guardados pero ningún audio grabado.
+    MissingAudio(u8),
     /// Error de entrada/salida.
     Io(std::io::Error),
 }
@@ -88,6 +90,10 @@ impl fmt::Display for Error {
             Self::SlotOccupied(n) => write!(f, "la posición {n} ya está ocupada"),
             Self::InvalidMetadata(why) => write!(f, "metadatos inválidos: {why}"),
             Self::InvalidSetting(why) => write!(f, "ajuste no válido: {why}"),
+            Self::MissingAudio(n) => write!(
+                f,
+                "la posición {n} tiene ajustes guardados pero ningún audio grabado"
+            ),
             Self::Io(e) => write!(f, "error de E/S: {e}"),
         }
     }

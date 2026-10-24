@@ -16,12 +16,26 @@ missing_docs = "warn"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 
+# Desarrollo: de nuestro código basta con números de línea en las trazas; la
+# información de depuración completa es lo que más hace crecer target/debug.
+[profile.dev]
+debug = "line-tables-only"
+
 # Dependencias optimizadas también en desarrollo: decodificar y remuestrear
 # audio sin optimizar es decenas de veces más lento. Nuestro código sigue
-# compilando rápido.
+# compilando rápido. Sin información de depuración: no las depuramos.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 # El procesado de audio propio también: sin optimizar es decenas de veces más lento.
 [profile.dev.package.jamman-audio]
 opt-level = 3
+
+# Binarios para publicar: `cargo build --profile dist`, en target/dist/.
+# Más lento de compilar que --release, que se queda para el día a día.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true

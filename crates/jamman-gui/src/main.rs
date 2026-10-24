@@ -15,6 +15,7 @@ mod selection;
 mod state;
 mod theme;
 mod ui;
+mod volume;
 mod waveform_cache;
 
 use eframe::egui;

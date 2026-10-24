@@ -11,6 +11,8 @@ use crate::{fmt, theme};
 /// Destino elegido en el selector.
 enum Target {
     Card(std::path::PathBuf),
+    /// Unidad vacía que se quiere preparar (se confirma antes).
+    Prepare(std::path::PathBuf),
     Pedal(Storage),
 }
 
@@ -72,6 +74,9 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         }
     });
 
+    if let Some(problem) = &app.format_warning {
+        format_warning(ui, problem);
+    }
     if !app.lib.is_open() {
         return;
     }
@@ -179,6 +184,22 @@ fn target_selector(app: &mut JamApp, ui: &mut egui::Ui) {
                     choice = Some(Target::Card(path.clone()));
                 }
             }
+            if !app.empty_drives.is_empty() {
+                ui.separator();
+                ui.label(RichText::new("Unidades vacías").small().weak());
+                for path in &app.empty_drives {
+                    if ui
+                        .selectable_label(false, format!("✨ Preparar {}…", label(path)))
+                        .on_hover_text(format!(
+                            "{}: crea la carpeta JamManStereo para usarla en el pedal",
+                            path.display()
+                        ))
+                        .clicked()
+                    {
+                        choice = Some(Target::Prepare(path.clone()));
+                    }
+                }
+            }
             ui.separator();
             ui.label(RichText::new("Pedal por USB").small().weak());
             if app.pedal_port.is_none() {
@@ -199,7 +220,23 @@ fn target_selector(app: &mut JamApp, ui: &mut egui::Ui) {
         });
     match choice {
         Some(Target::Card(path)) => app.open_card(&path),
+        Some(Target::Prepare(path)) => app.ask_prepare(path),
         Some(Target::Pedal(storage)) => app.open_pedal(storage, ui.ctx()),
         None => {}
     }
+}
+
+/// Aviso de que el pedal no podrá leer la tarjeta, con cómo formatearla.
+fn format_warning(ui: &mut egui::Ui, problem: &str) {
+    egui::Frame::group(ui.style())
+        .stroke(egui::Stroke::new(1.0, theme::DANGER))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new(format!("⚠ {problem} El pedal no podrá leerla."))
+                    .strong()
+                    .color(theme::DANGER),
+            );
+            ui.label(crate::volume::FORMAT_STEPS);
+        });
 }

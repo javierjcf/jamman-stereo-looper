@@ -14,7 +14,7 @@ use crate::jobs::{self, Op, TransferEvent, WaveformResult};
 use crate::player::Player;
 use crate::selection::ClickMods;
 use crate::state::Library;
-use crate::{detect, theme, ui};
+use crate::{detect, theme, ui, volume};
 
 /// Tramos de la forma de onda. 400 bastan para dibujarla y, en una tarjeta
 /// SD lenta, se leen en unos 2 s la primera vez (luego se usa la caché).
@@ -132,6 +132,15 @@ pub struct JamApp {
     pub player: Player,
     /// Tarjetas detectadas.
     pub detected: Vec<PathBuf>,
+    /// Unidades vacías detectadas, que se pueden preparar como tarjeta.
+    pub empty_drives: Vec<PathBuf>,
+    /// Por qué el pedal no podrá leer la tarjeta abierta, si es el caso.
+    pub format_warning: Option<String>,
+    /// Unidad vacía pendiente de confirmar que se prepara, con su problema
+    /// de formato si lo tiene.
+    pub confirm_prepare: Option<(PathBuf, Option<String>)>,
+    /// Lo copiado no estaba en la tarjeta al releerla: avisar de que está averiada.
+    pub card_faulty: bool,
     /// Puerto del pedal conectado por USB, si lo hay.
     pub pedal_port: Option<String>,
     /// Normalizar el volumen al importar.
@@ -167,12 +176,17 @@ impl JamApp {
         if let Some(theme) = crate::devshot::forced_theme() {
             cc.egui_ctx.set_theme(theme);
         }
+        let found = detect::find();
         let mut app = Self {
             lib: Library::default(),
             browser: LocalBrowser::new(browser::default_start()),
             show_browser: true,
             player: Player::default(),
-            detected: detect::find_cards(),
+            detected: found.cards,
+            empty_drives: found.empty,
+            format_warning: None,
+            confirm_prepare: None,
+            card_faulty: false,
             pedal_port: jamman_core::serial::find_pedal(),
             normalize: false,
             import_start: None,
@@ -228,13 +242,20 @@ impl JamApp {
 
     /// Vuelve a buscar tarjetas y el pedal.
     pub fn detect_cards(&mut self) {
-        self.detected = detect::find_cards();
+        let found = detect::find();
+        self.detected = found.cards;
+        self.empty_drives = found.empty;
         self.pedal_port = jamman_core::serial::find_pedal();
-        let cards = match self.detected.len() {
+        let mut cards = match self.detected.len() {
             0 => "ninguna tarjeta".to_owned(),
             1 => "1 tarjeta".to_owned(),
             n => format!("{n} tarjetas"),
         };
+        match self.empty_drives.len() {
+            0 => {}
+            1 => cards.push_str(", 1 unidad vacía"),
+            n => cards.push_str(&format!(", {n} unidades vacías")),
+        }
         let pedal = if self.pedal_port.is_some() {
             "pedal conectado por USB"
         } else {
@@ -251,6 +272,7 @@ impl JamApp {
         }
         self.player.stop();
         self.lib.open_pedal(storage);
+        self.format_warning = None;
         self.space = None;
         self.after_change();
         self.start(Op::List, TransferKind::List, ctx);
@@ -315,6 +337,12 @@ impl JamApp {
         match self.lib.open(path) {
             Ok(()) => {
                 self.after_change();
+                // La unidad, aunque se haya abierto su carpeta JamManStereo.
+                self.format_warning = self
+                    .lib
+                    .card()
+                    .and_then(|c| c.root().parent())
+                    .and_then(volume::check);
                 let n = self.lib.rows().len();
                 let name = path.file_name().map_or_else(
                     || path.display().to_string(),
@@ -324,6 +352,32 @@ impl JamApp {
             }
             Err(e) => self.error(format!("No se puede abrir {}: {e}", path.display())),
         }
+    }
+
+    /// Prepara una unidad vacía para el pedal (tras confirmación de la
+    /// interfaz): crea la carpeta `JamManStereo` y la abre. No formatea.
+    pub fn prepare_card(&mut self, mount: &Path) {
+        match jamman_core::card::Card::create(mount) {
+            Ok(_) => {
+                self.empty_drives.retain(|p| p != mount);
+                self.detected.push(mount.to_path_buf());
+                self.detected.sort();
+                self.open_card(mount);
+                if self.lib.is_open() {
+                    self.info(format!(
+                        "Tarjeta preparada: {}. {EJECT_HINT}",
+                        mount.display()
+                    ));
+                }
+            }
+            Err(e) => self.error(format!("No se pudo preparar {}: {e}", mount.display())),
+        }
+    }
+
+    /// Pide confirmación para preparar una unidad vacía.
+    pub fn ask_prepare(&mut self, mount: PathBuf) {
+        let problem = volume::check(&mount);
+        self.confirm_prepare = Some((mount, problem));
     }
 
     /// Pide una carpeta y la abre como tarjeta.
@@ -534,6 +588,7 @@ impl JamApp {
                     listed = true;
                 }
                 Ok(TransferEvent::Space { free, total }) => self.space = Some((free, total)),
+                Ok(TransferEvent::CardFaulty) => self.card_faulty = true,
                 Ok(TransferEvent::Failed { file, error }) => state.failures.push((file, error)),
                 Ok(TransferEvent::Done) | Err(TryRecvError::Disconnected) => {
                     finished = true;

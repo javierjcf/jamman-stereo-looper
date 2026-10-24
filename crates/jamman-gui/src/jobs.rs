@@ -47,6 +47,8 @@ pub enum TransferEvent {
         /// Totales.
         total: u64,
     },
+    /// Lo escrito no está en la tarjeta al leerla sin caché: parece averiada.
+    CardFaulty,
     /// Elemento que falló.
     Failed {
         /// Nombre del elemento.
@@ -204,7 +206,12 @@ fn run_steps<I>(
                 continue;
             }
             Err(StepError::Local(error)) => (error, false),
-            Err(StepError::Store(e)) => (e.to_string(), e.breaks_connection()),
+            Err(StepError::Store(e)) => {
+                if matches!(e, jamman_core::Error::WriteNotPersisted(_)) {
+                    emit(tx, ctx, TransferEvent::CardFaulty);
+                }
+                (e.to_string(), e.breaks_connection())
+            }
         };
         emit(tx, ctx, TransferEvent::Failed { file, error });
         if lost {
@@ -271,6 +278,7 @@ fn run_op(
                     &path,
                     &mut bytes_progress(0.3, 1.0),
                 )?;
+                store.verify_loop(entry.slot, &wav)?;
                 Ok(TransferEvent::Imported(entry.slot))
             })
         }
@@ -326,6 +334,7 @@ fn run_op(
             run_steps(items, tx, ctx, |l| {
                 l.entry.map_err(|e| StepError::Local(e.to_string()))?;
                 store.restore_loop(&card, l.slot, l.slot, &mut bytes_progress(0.0, 1.0))?;
+                store.verify_loop(l.slot, &card.audio_path(l.slot))?;
                 Ok(TransferEvent::Imported(l.slot))
             })
         }

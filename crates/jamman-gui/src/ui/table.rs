@@ -89,6 +89,9 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     let extra = if show_rating { RATING + spacing } else { 0.0 };
     let name_width = (ui.available_width() - fixed - extra).max(MIN_NAME);
 
+    // Los textos de las filas no se seleccionan: si no, capturan el clic (y
+    // ponen el cursor de texto) y la fila no se puede seleccionar.
+    ui.style_mut().interaction.selectable_labels = false;
     let mut table = TableBuilder::new(ui)
         .striped(true)
         .sense(if can_reorder {

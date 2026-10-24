@@ -56,6 +56,9 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         return;
     }
     let mut action = None;
+    // Los textos de las filas no se seleccionan: si no, capturan el clic (y
+    // ponen el cursor de texto) y la fila no se puede seleccionar.
+    ui.style_mut().interaction.selectable_labels = false;
     TableBuilder::new(ui)
         .id_salt("browser_table")
         .striped(true)

@@ -42,7 +42,11 @@ fn confirm_delete(app: &mut JamApp, ctx: &egui::Context) {
                 }
             });
         ui.add_space(4.0);
-        ui.label("Se borrarán de la tarjeta. No se puede deshacer.");
+        ui.label(if app.lib.pedal().is_some() {
+            "Se borrarán del pedal. No se puede deshacer."
+        } else {
+            "Se borrarán de la tarjeta. No se puede deshacer."
+        });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             let delete =

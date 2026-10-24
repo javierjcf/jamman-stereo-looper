@@ -224,6 +224,19 @@ impl Library {
         jamman_core::device::first_free_from(&occupied, start)
     }
 
+    /// Bucle que conviene seleccionar tras borrar `removed`, como en un
+    /// gestor de ficheros: el siguiente visible o, si no hay, el anterior.
+    pub fn next_after_removal(&self, removed: &[Slot]) -> Option<Slot> {
+        let order: Vec<Slot> = self.visible().iter().map(|r| r.slot).collect();
+        let last = order.iter().rposition(|s| removed.contains(s))?;
+        let kept = |s: &&Slot| !removed.contains(s);
+        order[last + 1..]
+            .iter()
+            .find(kept)
+            .or_else(|| order[..last].iter().rev().find(kept))
+            .copied()
+    }
+
     /// Todas las filas, por posición.
     pub fn rows(&self) -> &[Row] {
         &self.rows
@@ -449,6 +462,17 @@ mod tests {
         let (_d, lib) = library_with(&[(1, "a", 4), (2, "b", 4), (4, "c", 4)]);
         assert_eq!(lib.first_free_from(slot(1)), Some(slot(3)));
         assert_eq!(lib.first_free_from(slot(4)), Some(slot(5)));
+    }
+
+    #[test]
+    fn after_removing_loops_the_next_visible_one_is_proposed() {
+        let (_d, lib) = library_with(&[(1, "a", 4), (2, "b", 4), (3, "c", 4), (4, "d", 4)]);
+        assert_eq!(lib.next_after_removal(&[slot(2)]), Some(slot(3)));
+        assert_eq!(lib.next_after_removal(&[slot(2), slot(3)]), Some(slot(4)));
+        // Si se borra el último, queda el anterior.
+        assert_eq!(lib.next_after_removal(&[slot(4)]), Some(slot(3)));
+        let all = [slot(1), slot(2), slot(3), slot(4)];
+        assert_eq!(lib.next_after_removal(&all), None);
     }
 
     #[test]

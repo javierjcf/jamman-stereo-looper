@@ -5,8 +5,11 @@
 //! `JAMMAN_SCREENSHOT_SLOT=N` selecciona antes el bucle `N`, con
 //! `JAMMAN_SCREENSHOT_THEME=light|dark` fuerza el tema y con
 //! `JAMMAN_SCREENSHOT_BROWSER=carpeta` abre esa carpeta en el explorador y con
-//! `JAMMAN_SCREENSHOT_WAIT=segundos` cambia la espera (por defecto 5 s). Sirve para
-//! revisar el diseño y generar las capturas del README:
+//! `JAMMAN_SCREENSHOT_WAIT=segundos` cambia la espera (por defecto 5 s). Para
+//! reproducir interacciones, `JAMMAN_SCREENSHOT_SCROLL=píxeles` desplaza la
+//! tabla de bucles al segundo y `JAMMAN_SCREENSHOT_DELETE=N` pide borrar el bucle
+//! `N` a los dos segundos y lo confirma al tercero. Sirve para revisar el diseño y generar las capturas del
+//! README:
 //!
 //! ```text
 //! JAMMAN_SCREENSHOT=captura.ppm cargo run -p jamman-gui
@@ -31,6 +34,10 @@ pub struct DevShot {
     pub select_slot: Option<u8>,
     /// Carpeta que se abre en el explorador.
     pub browser_dir: Option<PathBuf>,
+    /// Píxeles que se desplaza la tabla (una vez).
+    scroll: Option<f32>,
+    /// Bucle que se borra (una vez).
+    delete_slot: Option<u8>,
     started: Instant,
     wait: Duration,
     requested: bool,
@@ -47,6 +54,12 @@ impl DevShot {
                 .ok()
                 .and_then(|s| s.parse().ok()),
             browser_dir: std::env::var_os("JAMMAN_SCREENSHOT_BROWSER").map(PathBuf::from),
+            scroll: std::env::var("JAMMAN_SCREENSHOT_SCROLL")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            delete_slot: std::env::var("JAMMAN_SCREENSHOT_DELETE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             started: Instant::now(),
             wait: std::env::var("JAMMAN_SCREENSHOT_WAIT")
                 .ok()
@@ -55,6 +68,38 @@ impl DevShot {
             requested: false,
             done: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Añade a la entrada la rueda del ratón pedida, sobre la tabla.
+    pub fn inject_input(&mut self, raw: &mut egui::RawInput) {
+        if self.started.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        if let Some(pixels) = self.scroll.take() {
+            let over_table = egui::pos2(700.0, 500.0);
+            raw.events.push(egui::Event::PointerMoved(over_table));
+            raw.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -pixels),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
+            });
+        }
+    }
+
+    /// Bucle que toca borrar ahora, si se pidió.
+    pub fn take_delete(&mut self) -> Option<u8> {
+        if self.started.elapsed() < Duration::from_secs(2) {
+            return None;
+        }
+        self.delete_slot.take()
+    }
+
+    /// `true` cuando toca confirmar el borrado pedido (un segundo después de
+    /// abrir el diálogo).
+    pub fn confirm_now(&self) -> bool {
+        self.delete_slot.is_none() && self.started.elapsed() >= Duration::from_secs(3)
     }
 
     /// Avanza un fotograma; captura y cierra cuando toca.

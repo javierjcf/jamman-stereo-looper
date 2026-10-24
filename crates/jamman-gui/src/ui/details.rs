@@ -28,6 +28,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         (Some(s), t) if s == slot => t,
         _ => slot.get(),
     };
+    let selected = app.lib.selection().len();
     let Some(draft) = app.lib.draft.as_mut() else {
         return;
     };
@@ -208,8 +209,13 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         {
             export = true;
         }
+        let label = if selected > 1 {
+            format!("🗑 Borrar los {selected} seleccionados…")
+        } else {
+            "🗑 Borrar bucle…".to_owned()
+        };
         if ui
-            .button(RichText::new("🗑 Borrar bucle…").color(theme::DANGER))
+            .button(RichText::new(label).color(theme::DANGER))
             .clicked()
         {
             delete = true;
@@ -227,7 +233,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         app.export_to_browser(vec![slot], ui.ctx());
     }
     if delete {
-        app.confirm_delete = Some(vec![slot]);
+        app.ask_delete_selection();
     }
     if let Some(to) = move_to {
         app.move_or_swap(slot, to);

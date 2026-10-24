@@ -88,7 +88,7 @@ fn handle_shortcuts(app: &mut JamApp, ctx: &egui::Context) {
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
         app.ask_delete_selection();
     }
-    if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) && app.lib.card().is_some() {
+    if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) && app.lib.is_open() {
         app.lib.select_all_visible();
     }
 }

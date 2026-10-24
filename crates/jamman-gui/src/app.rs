@@ -148,6 +148,8 @@ pub struct JamApp {
     pub confirm_delete: Option<Vec<Slot>>,
     /// Selección pendiente por cambios sin guardar.
     pub pending_select: Option<PendingSelect>,
+    /// Bucle que se selecciona cuando termina un borrado.
+    select_after_delete: Option<Slot>,
     /// Posición de destino del control "mover a".
     pub move_target: (Option<Slot>, u8),
     /// Espacio libre y total de la tarjeta.
@@ -179,6 +181,7 @@ impl JamApp {
             transfer_report: None,
             confirm_delete: None,
             pending_select: None,
+            select_after_delete: None,
             move_target: (None, 1),
             space: None,
             devshot: crate::devshot::DevShot::from_env(),
@@ -573,13 +576,22 @@ impl JamApp {
                 format!("{} bucles.", self.lib.rows().len()),
                 "No se pudieron leer los bucles",
             ),
-            TransferKind::Delete => (
-                match state.removed.as_slice() {
-                    [one] if errors == 0 => format!("Bucle {:02} borrado. {hint}", one.get()),
-                    _ => format!("{} bucles borrados, {errors} con error. {hint}", state.done),
-                },
-                "Algunos bucles no se pudieron borrar",
-            ),
+            TransferKind::Delete => {
+                // Se sigue donde se estaba: queda seleccionado el siguiente.
+                if let Some(next) = self.select_after_delete.take()
+                    && self.lib.row(next).is_some()
+                    && self.lib.selected().is_none()
+                {
+                    self.lib.select(Some(next));
+                }
+                (
+                    match state.removed.as_slice() {
+                        [one] if errors == 0 => format!("Bucle {:02} borrado. {hint}", one.get()),
+                        _ => format!("{} bucles borrados, {errors} con error. {hint}", state.done),
+                    },
+                    "Algunos bucles no se pudieron borrar",
+                )
+            }
             TransferKind::Save => (
                 format!("Cambios guardados. {hint}"),
                 "No se pudieron guardar los cambios",
@@ -707,6 +719,7 @@ impl JamApp {
         if self.player.current().is_some_and(|s| slots.contains(&s)) {
             self.player.stop();
         }
+        self.select_after_delete = self.lib.next_after_removal(slots);
         let op = Op::Remove {
             slots: slots.to_vec(),
         };
@@ -803,6 +816,21 @@ impl eframe::App for JamApp {
         }
         if let Some(shot) = &mut self.devshot {
             shot.tick(ctx);
+            if let Some(slot) = shot.take_delete().and_then(|n| Slot::new(n).ok()) {
+                self.lib.select(Some(slot));
+                self.confirm_delete = Some(vec![slot]);
+            }
+            if shot.confirm_now()
+                && let Some(slots) = self.confirm_delete.take()
+            {
+                self.delete(&slots, ctx);
+            }
+        }
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(shot) = &mut self.devshot {
+            shot.inject_input(raw);
         }
     }
 

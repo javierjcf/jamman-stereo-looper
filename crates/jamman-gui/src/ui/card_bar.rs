@@ -124,11 +124,24 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
             }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.weak(if on_pedal {
+            let hint = if on_pedal {
                 "Ctrl+A: todo · Supr: borrar"
             } else {
-                "Ctrl+A: todo · Supr: borrar · Espacio: escuchar"
-            });
+                "Arrastra un bucle sobre otro para intercambiarlos · Espacio: escuchar"
+            };
+            // Solo si cabe: con la ventana estrecha se montaría en los botones.
+            let width = ui
+                .painter()
+                .layout_no_wrap(
+                    hint.to_owned(),
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    egui::Color32::PLACEHOLDER,
+                )
+                .size()
+                .x;
+            if width < ui.available_width() {
+                ui.weak(hint);
+            }
         });
     });
 }

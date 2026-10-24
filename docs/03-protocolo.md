@@ -127,10 +127,36 @@ Cargas (después de los 10 bytes de cabecera). ✅ salvo indicación.
 | 16 | `FileCloseRequest` | `i64` manejador | |
 | 17 | `FolderContentsRequest` | cadena ruta | |
 | 22 | `IssueCommandRequest` | 3 enteros | 🔶 comandos genéricos; **sin implementar** |
+| 26 (`0x1a`) | `GetPropertyRequest` | `u8` n, n × `u16` (el original la envía vacía), `u16` id | ✅ validado con el pedal |
 
 Sin descifrar todavía: `0x13` (🔶 petición de propiedades múltiples, respuesta
-`0x14`), `0x17` (lanzar proceso, respuesta `0x18`) y `0x1a` (leer propiedad,
-respuesta `0x1b`).
+`0x14`) y `0x17` (lanzar proceso, respuesta `0x18`).
+
+### Propiedades (validado con el pedal, 24/10/2026)
+
+El original las lee antes de copiar para avisar de «not enough space…»
+(`FUN_0047b090`, que compara el tamaño del fichero con los MB libres). Son
+kilobytes:
+
+| Id | Valor | Ejemplo real |
+|---|---|---|
+| 10 | KB libres de la memoria interna | 444 170 |
+| 11 | KB totales de la memoria interna | 516 608 |
+| 12 | KB libres de la tarjeta SD | 13 368 608 |
+| 13 | KB totales de la tarjeta SD | 15 432 704 (tarjeta de 16 GB) |
+
+**El pedal no avisa cuando no cabe un fichero**: acepta las escrituras y
+responde `Success`. Por eso la app comprueba el espacio antes de subir.
+
+### Incidente: escrituras perdidas en la tarjeta del pedal
+
+Con una tarjeta de 16 GB y ~1,97 GiB ocupados, todo lo que se escribió por USB
+a partir de ese punto se perdió en silencio: el fichero quedaba con el tamaño
+correcto pero con contenido viejo de la tarjeta, y el pedal llegó a colgarse.
+La memoria interna, en las mismas condiciones, funcionaba perfectamente
+(probado con `examples/write_verify`). El corte coincide con 2 GiB (2³¹): o la
+tarjeta es falsa o está defectuosa, o el pedal falla al escribir más allá de
+ese punto. Pendiente de comprobar la tarjeta en el PC con `f3`.
 
 ### Observaciones útiles
 

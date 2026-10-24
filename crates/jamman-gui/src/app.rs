@@ -731,6 +731,10 @@ impl JamApp {
             self.error("Mover bucles no está disponible en el pedal (no admite renombrar).");
             return;
         }
+        if self.lib.has_unsaved_changes() {
+            self.error("Guarda o descarta los cambios antes de mover el bucle.");
+            return;
+        }
         if matches!(self.player.current(), Some(s) if s == from || s == to) {
             self.player.stop();
         }

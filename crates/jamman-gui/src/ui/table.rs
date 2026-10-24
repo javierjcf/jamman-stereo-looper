@@ -15,6 +15,8 @@ enum RowAction {
     Play(Slot),
     Export(Slot),
     Delete(Slot),
+    /// Bucle arrastrado (`from`) y soltado sobre otro (`to`).
+    Swap(Slot, Slot),
 }
 
 pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
@@ -44,6 +46,8 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
     }
 
     let selection = app.lib.selection().clone();
+    // Reordenar arrastrando solo en tarjetas del PC: el pedal no renombra.
+    let can_reorder = app.lib.pedal().is_none() && app.transfer.is_none();
     let playing = app.player.current().filter(|_| app.player.is_playing());
     let (sort, desc) = (app.lib.sort, app.lib.sort_desc);
     let mut action = None;
@@ -87,7 +91,11 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
 
     let mut table = TableBuilder::new(ui)
         .striped(true)
-        .sense(Sense::click())
+        .sense(if can_reorder {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        })
         .cell_layout(Layout::left_to_right(Align::Center))
         .column(Column::exact(FIXED[0]))
         .column(Column::exact(name_width).clip(true));
@@ -174,6 +182,30 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
                 }
 
                 let response = row.response();
+                if can_reorder {
+                    response.dnd_set_drag_payload(slot);
+                    if let Some(from) = response.dnd_hover_payload::<Slot>()
+                        && *from != slot
+                    {
+                        let painter = response.ctx.layer_painter(response.layer_id);
+                        painter.rect_stroke(
+                            response.rect,
+                            2.0,
+                            egui::Stroke::new(2.0, theme::ACCENT),
+                            egui::StrokeKind::Inside,
+                        );
+                        response.clone().on_hover_text(format!(
+                            "Suelta para intercambiar {:02} y {:02}",
+                            from.get(),
+                            slot.get()
+                        ));
+                    }
+                    if let Some(from) = response.dnd_release_payload::<Slot>()
+                        && *from != slot
+                    {
+                        action = Some(RowAction::Swap(*from, slot));
+                    }
+                }
                 if response.double_clicked() {
                     action = Some(RowAction::Play(slot));
                 } else if response.clicked() {
@@ -229,6 +261,7 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
                 app.export_to_browser(vec![slot], ui.ctx());
             }
         }
+        Some(RowAction::Swap(from, to)) => app.move_or_swap(from, to),
         Some(RowAction::Delete(slot)) => {
             if selection.contains(&slot) {
                 app.ask_delete_selection();

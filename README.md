@@ -50,7 +50,10 @@ Funciona de dos formas:
 - **💾 Copia de seguridad**: copia todos los bucles, con sus ajustes, a una
   carpeta con el formato de la tarjeta (se puede abrir con 📂). **⤴ Restaurar**
   sube una copia al pedal, en sus mismas posiciones si están libres.
+- Muestra el espacio libre que informa el pedal y **no sube nada que no
+  quepa** (el pedal no avisa por sí mismo).
 - Las operaciones van en segundo plano; el puerto solo se abre mientras duran.
+  Si el pedal deja de responder, se para y se indica qué quedó sin copiar.
 - Por USB no se puede escuchar ni mover bucles (habría que descargarlos
   enteros); para eso, saca la tarjeta o exporta.
 
@@ -72,7 +75,8 @@ Con los ajustes que describe el manual del pedal:
 - Catálogo: artista, género, valoración, etiquetas y descripción.
 - «Guardar» (Ctrl+S) escribe solo lo que ha cambiado; avisa si cambias de bucle
   con cambios sin guardar.
-- Mover un bucle a otra posición (si está ocupada, se intercambian).
+- Mover un bucle a otra posición (si está ocupada, se intercambian), desde el
+  panel de ajustes o **arrastrando un bucle sobre otro** en la tabla.
 - Borrar uno o varios bucles (Supr), con confirmación.
 
 ### Seguridad de la tarjeta

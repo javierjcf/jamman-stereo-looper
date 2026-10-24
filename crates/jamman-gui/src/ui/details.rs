@@ -189,7 +189,8 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         // El pedal no admite renombrar carpetas: mover solo en tarjetas del PC.
         if !on_pedal {
             ui.horizontal(|ui| {
-                ui.label("Mover a la posición");
+                ui.label("Mover a la posición")
+                    .on_hover_text("También puedes arrastrar un bucle sobre otro en la tabla");
                 ui.add(DragValue::new(&mut target).range(1..=SLOTS_PER_STORAGE));
                 if ui
                     .add_enabled(target != slot.get(), egui::Button::new("Mover"))
@@ -229,10 +230,6 @@ pub fn show(app: &mut JamApp, ui: &mut egui::Ui) {
         app.confirm_delete = Some(vec![slot]);
     }
     if let Some(to) = move_to {
-        if app.lib.has_unsaved_changes() {
-            app.error("Guarda o descarta los cambios antes de mover el bucle.");
-        } else {
-            app.move_or_swap(slot, to);
-        }
+        app.move_or_swap(slot, to);
     }
 }

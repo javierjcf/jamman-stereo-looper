@@ -128,3 +128,11 @@ duradero**; ninguna funcionalidad sin necesidad real.
   (característica `testing`), que responde con los formatos validados.
 - Permiso en Linux con una regla udev (`uaccess`) en lugar del grupo `uucp`:
   solo el JamMan, solo el usuario de la sesión y sin reiniciar sesión.
+
+## D19. Ante un fallo de comunicación, parar
+- Si el puerto falla o llega un mensaje que no encaja (`Error::breaks_connection`),
+  la conversación con el pedal ya no es fiable: lo que se siga enviando puede
+  interpretarse como parte de otro mensaje. Se para la operación, se anota lo
+  que quedó sin hacer y no se intenta ni limpiar ni volver a listar.
+- Se comprueba el espacio libre (propiedades 10–13) antes de subir, porque el
+  pedal acepta escrituras que no caben sin avisar.

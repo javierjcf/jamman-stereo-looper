@@ -112,6 +112,22 @@ Con los ajustes que describe el manual del pedal:
 
 ## Instalación
 
+### Binarios para Linux
+
+En [Releases](https://github.com/javierjcf/jamman-stereo-looper/releases) hay
+un `.tar.gz` con `jamman-gui`, `jamman` y la regla udev. Se descomprime y se
+ejecuta; solo necesita las bibliotecas de sonido (ALSA) y `libudev`, que trae
+cualquier escritorio Linux. Para usar el pedal por USB, instala la regla udev
+(ver [Permiso para usar el pedal en Linux](#permiso-para-usar-el-pedal-en-linux)).
+
+```bash
+tar -xzf jamman-stereo-looper-v0.1.0-linux-x86_64.tar.gz
+cd jamman-stereo-looper-v0.1.0-linux-x86_64
+./jamman-gui
+```
+
+### Desde el código
+
 Requiere Rust 1.95 o superior. En Linux hacen falta las cabeceras de ALSA y
 libudev (en Arch: `alsa-lib` y `systemd-libs`; en Debian/Ubuntu:
 `libasound2-dev` y `libudev-dev`).
@@ -256,9 +272,53 @@ original, y lo **opcional**.
 ## Desarrollo
 
 ```bash
-cargo test                     # tests de todo el proyecto
-cargo clippy --all-targets     # sin avisos
+cargo test --workspace --all-features                 # tests de todo el proyecto
+cargo clippy --workspace --all-targets --all-features # sin avisos
+cargo fmt                                             # formato
 ```
+
+### Perfiles de compilación
+
+| Perfil | Comando | Para qué | Salida |
+|---|---|---|---|
+| `dev` | `cargo build` | Desarrollar: compila rápido | `target/debug/` |
+| `release` | `cargo build --release` | Probar la app optimizada en el día a día | `target/release/` |
+| `dist` | `cargo build --profile dist` | Publicar: LTO, una unidad de compilación y sin símbolos (binarios más pequeños, compila en unos minutos) | `target/dist/` |
+
+`target/` crece con cada compilación porque Cargo no borra nada antiguo;
+`cargo clean` lo vacía sin riesgo (la siguiente compilación tarda más).
+
+### Publicar una versión (Linux, a mano)
+
+1. Comprobar que todo está bien y subir la versión en `[workspace.package]` de
+   `Cargo.toml` y en `CHANGELOG.md`. Commit.
+2. Compilar los binarios de distribución:
+
+   ```bash
+   cargo build --profile dist -p jamman-gui -p jamman-cli
+   ```
+
+3. Empaquetar binarios, regla udev y README en una carpeta con la
+   versión y el sistema en el nombre, comprimirla y calcular su suma SHA-256:
+
+   ```bash
+   V=v0.1.0; P=jamman-stereo-looper-$V-linux-x86_64
+   mkdir -p dist/$P
+   cp target/dist/jamman-gui target/dist/jamman packaging/linux/70-jamman.rules README.md dist/$P/
+   tar -czf dist/$P.tar.gz -C dist $P
+   (cd dist && sha256sum $P.tar.gz > $P.tar.gz.sha256)
+   ```
+
+4. Etiquetar, subir y crear el release en GitHub con los ficheros:
+
+   ```bash
+   git tag -a $V -m "jamman-stereo-looper $V"
+   git push origin main $V
+   gh release create $V dist/$P.tar.gz dist/$P.tar.gz.sha256 --title "$V" --notes-file CHANGELOG.md
+   ```
+
+El binario depende de la versión de glibc del sistema donde se compila: puede
+no arrancar en distribuciones más antiguas que esa.
 
 ```
 crates/
